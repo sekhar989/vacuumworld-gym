@@ -25,8 +25,18 @@ import vacuumworld.vwaction as vwaction
 import vacuumworld.vwagent
 
 class VacuumWorld(gym.Env):
+    """ 
+        An OpenAI gym wrapper around the Vacuum World Environment. See OpenAI gym API details: https://gym.openai.com/
+        Defined for a single (white) agent. Fully observable.
+    """
     
     def __init__(self, dimension, grid=None):
+        """
+
+        Args:
+            dimension (int): grid dimension
+            grid ([type], optional): a vacuum world grid to will be loaded. By default a random grid will be loaded.
+        """
         if grid is None:
             grid = vw.random_grid(dimension, 1, 0, 0, 0, dimension, dimension)
         self.__initial_grid = copy.deepcopy(grid)
@@ -61,20 +71,28 @@ class VacuumWorld(gym.Env):
         return self.state()
 
 class VacuumWorldPO(VacuumWorld):
+    """ 
+        Partially Observable version of the VacuumWorld environment, observations are as seen by the agent (2 x 3 or 3 x 2).
+    """
 
     def state(self):
         agent = next(iter(self.env.ambient.agents.values()))
         return self.env.processes[0].get_perception(self.env.ambient.grid, agent)
 
 class Vectorise(gym.ObservationWrapper):
+    """ 
+        Vectorised version of the VacuumWorld environment. Converts the grid into a CHW [0-255] image. 
+        
+            Channel[0]: Agent Position
+            Channel[1]: Agent Orientation
+            Channel[2]: Dirt
+    """
 
     dirt_table = {vwc.colour.green:128, vwc.colour.orange:255}
     orientation_table = {vwc.orientation.north:64,vwc.orientation.east:128,vwc.orientation.south:192,vwc.orientation.west:255}
     
     def __init__(self, env):
         super(Vectorise,self).__init__(env)
-
-        print(env.unwrapped.dimension)
         self.observation_space = gym.spaces.Box(low=0, high=1, shape=(3, env.unwrapped.dimension, env.unwrapped.dimension), dtype=np.uint8)
             
     def observation(self, grid):
