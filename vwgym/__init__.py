@@ -82,7 +82,7 @@ class VacuumWorldPO(VacuumWorld):
 class Vectorise(gym.ObservationWrapper):
     """ 
         Vectorised version of the VacuumWorld environment. Converts the grid into a CHW [0-255] image. 
-        
+
             Channel[0]: Agent Position
             Channel[1]: Agent Orientation
             Channel[2]: Dirt
@@ -100,15 +100,15 @@ class Vectorise(gym.ObservationWrapper):
         obs = np.zeros(self.observation_space.shape, dtype=self.observation_space.dtype)
 
         c = next(iter(grid._get_agents().keys()))
-        obs[0, c[0], c[1]] = 255 #mask for the current agent
+        obs[0, c[1], c[0]] = 255 #mask for the current agent
         
         for c,a in grid._get_agents().items(): #all agents
             #print(c,a)
-            obs[1, c[0],c[1]] = Vectorise.orientation_table[a.orientation] 
+            obs[1, c[1], c[0]] = Vectorise.orientation_table[a.orientation] 
             
         for c,d in grid._get_dirts().items(): #all dirts
             #print(c,d)
-            obs[2, c[0], c[1]] = Vectorise.dirt_table[d.colour]
+            obs[2, c[1], c[0]] = Vectorise.dirt_table[d.colour]
 
         return obs
 
