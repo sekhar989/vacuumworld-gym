@@ -23,6 +23,7 @@ from vacuumworld.vwc import action, direction
 
 import vacuumworld.vwaction as vwaction
 import vacuumworld.vwagent
+import itertools
 
 class VacuumWorld(gym.Env):
     """ 
@@ -111,6 +112,116 @@ class Vectorise(gym.ObservationWrapper):
             obs[2, c[1], c[0]] = Vectorise.dirt_table[d.colour]
 
         return obs
+
+
+class StepWrapper(gym.Wrapper):
+    
+    def __init__(self, env):
+        super(StepWrapper, self).__init__(env)
+        self.ep_rewards = 0
+        self.ep_len = 0
+        self.time_penalty = 0
+        self.ep_action_summary = []
+
+
+    def _get_agent_loc(self, agent_locs):
+        x, y = [list(i) for i in agent_locs]
+        return [i for i in zip(x, y)]
+
+    def _get_dirt_loc(self, dirt_locs):
+        x, y = [list(i) for i in dirt_locs]
+        return [i for i in zip(x, y)]
+
+    def reward(self, obs, action):
+
+        self.ep_len += 1
+        self.time_penalty += 1
+
+        agent_loc = self._get_agent_loc(np.where(obs[0,:, :]==255))[0]
+        gr_dirt_loc = self._get_dirt_loc(np.where(obs[2,:, :]==128))
+        or_dirt_loc = self._get_dirt_loc(np.where(obs[2,:, :]==255))
+        # print(agent_loc, 'agent loc')
+        # print(gr_dirt_loc, 'green dirt loc')
+        # print(or_dirt_loc, 'orange dirt loc')
+        dirt_locs = list(itertools.chain.from_iterable([or_dirt_loc, gr_dirt_loc]))
+
+        action = self.action_meanings[action]
+        done = False
+
+        if len(dirt_locs) == 0:
+            done = True
+        
+        # if agent_loc in dirt_locs and action == 'clean':
+        #     reward = 50 #- len(dirt_locs) * (self.ep_rewards/self.ep_len)
+        #     self.ep_rewards += reward
+        #     self.time_penalty = 0
+        #     return reward, done
+        # else:
+        #     if self.ep_len < 500:
+        #         reward = -1 - self.time_penalty/10 #* (2**(len(dirt_locs))) #- len(dirt_locs) * (self.ep_rewards/self.ep_len)
+        #         self.ep_rewards += reward
+        #         return reward, done
+        #     else:
+        #         print('dead...')
+        #         done = True
+        #         reward = -100
+        #         self.ep_rewards += reward
+        #         return reward, done
+
+        #####################################
+        # print(action, agent_loc, dirt_locs)
+        #####################################
+
+        if agent_loc in dirt_locs and action == 'clean':
+            reward = 30 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
+            self.ep_rewards += reward 
+            return reward, done
+            
+        elif agent_loc in dirt_locs and (action != 'clean' or action == 'idle'):
+            reward = -5 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
+            self.ep_rewards += reward 
+            return reward, done
+
+        elif agent_loc not in dirt_locs and (action == 'clean' or action == 'idle'):
+            reward = -5 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
+            self.ep_rewards += reward 
+            return reward, done
+
+        elif len(dirt_locs) > 0 and action == 'idle':
+            reward = -5 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
+            self.ep_rewards += reward 
+            return reward, done
+
+        # elif self.ep_action_summary[-5:].count('turn_right') == 5 or self.ep_action_summary[-5:].count('turn_left') == 5:
+        #     # reward = -1 * len(dirt_locs) * int(np.sqrt(self.ep_len))
+        #     reward = -1 * int(np.sqrt(self.ep_len))
+        #     print('stuck penalty', reward)
+        #     self.ep_rewards += reward
+        #     return reward, done
+
+        else:
+            reward = -1
+            self.ep_rewards += reward
+            return reward, done
+        
+    def step(self, prev_state, action):
+        state, reward, done, _x = self.env.step(action)
+        reward, done = self.reward(prev_state, action)
+        self.ep_action_summary.append(self.env.action_meanings[action])
+        if done:
+            ep_info = {'ep_rewards': self.ep_rewards, 'ep_len': self.ep_len}
+            for a in self.env.action_meanings:
+                ep_info[a] = self.ep_action_summary.count(a)
+            print(ep_info)
+            self.ep_rewards = 0
+            self.ep_len = 0
+            self.ep_action_summary = []
+        else:
+            ep_info = {'ep_rewards': None, 'ep_len': None}
+            for a in self.env.action_meanings:
+                ep_info[a] = None
+
+        return state, reward, done, ep_info
 
 
 if __name__ == "__main__":
