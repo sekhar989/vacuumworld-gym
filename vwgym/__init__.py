@@ -147,9 +147,17 @@ class StepWrapper(gym.Wrapper):
 
         action = self.action_meanings[action]
         done = False
+        dead = False
+        blank_hit = 0
 
-        if len(dirt_locs) == 0:
+        if self.ep_len >= 5000:
             done = True
+            dead = True
+            print('Time Up...')
+        elif len(dirt_locs) == 0:
+            print('Grid Cleaned !! :)')
+            done = True
+
         
         # if agent_loc in dirt_locs and action == 'clean':
         # # if action == 'clean':
@@ -177,8 +185,18 @@ class StepWrapper(gym.Wrapper):
         # print(action, agent_loc, dirt_locs)
         #####################################
 
-        if agent_loc in dirt_locs and action == 'clean':
+        if dead:
+            reward = -20
+            self.ep_rewards += reward
+            return reward, done
+
+        elif agent_loc in dirt_locs and action == 'clean':
             reward = 20 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
+            blank_hit = 0
+            if len(dirt_locs) == 0:
+                print('Grid Cleaned !! :)')
+                done = True
+                reward += 5
             self.ep_rewards += reward 
             return reward, done
             
@@ -188,23 +206,32 @@ class StepWrapper(gym.Wrapper):
             return reward, done
 
         elif agent_loc not in dirt_locs and (action == 'clean' or action == 'idle'):
-            reward = -5 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
-            self.ep_rewards += reward 
-            return reward, done
-
-        elif len(dirt_locs) > 0 and action == 'idle':
             reward = -2 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
             self.ep_rewards += reward 
             return reward, done
 
-        elif self.ep_action_summary[-5:].count('turn_right') == 5 or self.ep_action_summary[-5:].count('turn_left') == 5:
+        elif len(dirt_locs) > 0 and action == 'idle':
+            reward = -5 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
+            self.ep_rewards += reward 
+            return reward, done
+
+        elif len(dirt_locs) > 0 and (self.ep_action_summary[-8:].count('turn_right') == 8 or \
+                self.ep_action_summary[-8:].count('turn_left') == 8) or \
+                self.ep_action_summary[-20:].count('move') == 20:
             # reward = -1 * len(dirt_locs) * int(np.sqrt(self.ep_len))
-            reward = -1 * int(np.sqrt(self.ep_len))
-            print('stuck penalty', reward)
+            reward = -2 #* int(np.sqrt(self.ep_len)/2)
+            # print('stuck penalty', reward)
             self.ep_rewards += reward
             return reward, done
 
         else:
+            # blank_hit += 1
+
+            # if blank_hit == 10:
+            #     reward = -5
+            #     self.ep_rewards += reward
+            #     blank_hit = 0
+            # else:
             reward = 0
             self.ep_rewards += reward
             return reward, done

@@ -14,7 +14,7 @@ import time
 import numpy as np
 from tqdm import tqdm
 
-# torch.manual_seed(518123)
+torch.manual_seed(518123)
 
 if torch.cuda.is_available():
     print('GPU Available:\t', True)
@@ -26,7 +26,7 @@ else:
     device = 'cpu'
 
 args = {
-            'lr': 1e-4,
+            'lr': 25e-4,
             'steps': 400,
             'max_steps': 1e8,
             'env_reboot':5e5,
@@ -34,10 +34,10 @@ args = {
             'gamma_w': 0.95,
             'gamma_m': 0.999,
             'alpha': 0.85,
-            'eps': 0.05,
-            'grid_size': 3,
-            'd': 64,
-            'k': 8,
+            'eps': 0.1,
+            'grid_size': 5,
+            'd': 256,
+            'k': 16,
             'len_hist': 10,
             'grad_clip':5.0,
             'writer': True
@@ -51,9 +51,11 @@ def train(args, device):
     num_actions = env.action_space.n
 
     f_net = FuNet(input_shape, args['d'], args['len_hist'], args['eps'], args['k'], num_actions, device)
-
     optimizer = torch.optim.Adam(f_net.parameters(), lr=args['lr'], eps=1e-5)
     goal_history, s_Mt_hist, ep_binary = f_net.agent_model_init()
+
+    # if last_checkpoint:
+    #     f_net.load
 
     prev_x = env.reset()
 
@@ -81,11 +83,13 @@ def train(args, device):
                             'adv_m', 'adv_w' ], space=args['steps'])
 
         for __ in tqdm(range(args['steps'])):
+
             action_probs, v_Mt, v_Wt, goal_history, s_Mt_hist = f_net(x, goal_history, s_Mt_hist)
             # print(action_probs)
             a_t, log_p, entropy = take_action(action_probs)
             # print('previous:\n', prev_x)
             x, reward, done, ep_info = env.step(prev_x, a_t[0])
+
             # print('Done\t:', done)
             # print('action:\t', env.action_meanings[a_t])
             # print('post:\n', x)
@@ -122,7 +126,7 @@ def train(args, device):
             ep = torch.FloatTensor([1.0 - done]).to(device)
             # print('EpisodeStatus:\t', ep)
             ep_binary.pop(0)
-            ep_binary.append(ep)
+            ep_binary.append(ep.view(1, 1))
 
             # print('ext_r_i', torch.FloatTensor([reward]).to(device))
             # print('int_r_i', f_net.int_reward(goal_history, s_Mt_hist, ep_binary),)
@@ -172,7 +176,7 @@ def train(args, device):
                 'args': args,
                 'processor_mean': f_net.pre_.rms.mean,
                 'optim': optimizer.state_dict()},
-                f'saved_model/vwgym_f_net_step_{step}.pt')
+                f'saved_model/vwgym_f_net_last_checkpoint.pt')
 
         loss.backward()
         # torch.nn.utils.clip_grad_norm_(f_net.parameters(), args['grad_clip'])

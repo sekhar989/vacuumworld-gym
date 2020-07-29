@@ -40,7 +40,7 @@ class Percept(nn.Module):
 
         self.percept = nn.Sequential(
             nn.Conv2d(in_channels = channels, out_channels = 16, kernel_size= (3, 3)),
-            nn.Tanh(),
+            nn.ReLU(),
             Flatten(),
             nn.Linear(h_out * w_out * 16, d),
             nn.ReLU()
@@ -60,17 +60,19 @@ class Manager(nn.Module):
     f_valueM(g_t) = vM_t            ## Manager Value Function
 
     """
-    def __init__(self, d, epsilon, device):
+    def __init__(self, d, epsilon, device, len_hist):
         super(Manager, self).__init__()
 
         self.d = d                  ## Hidden Internal Dimension
         self.d2 = d*2
         self.dd = 32
         self.epsilon = epsilon
+        self.hist_lim = len_hist
 
         self.M_space = nn.Linear(self.d, self.d)
         self.M_relu = nn.ReLU()
-        self.M_goals = nn.Linear(self.d2, self.d)
+        self.M_tanh = nn.Tanh()
+        self.M_goals = nn.Linear(self.d, self.d)
         self.M_value = nn.Linear(self.d, 1)
         # self.M_value = nn.Sequential(
         #                                 nn.Linear(self.d, self.dd),
@@ -79,13 +81,13 @@ class Manager(nn.Module):
         #                             )
         self.device = device
 
-    def forward(self, z_precept, s_tm1):
+    def forward(self, z_precept):
 
         s_t = self.M_relu(self.M_space(z_precept))      ## Manager Internal State Representation
         ## print('w_shape:\t', s_tm1.shape, 'Ut_shape', s_t.shape)
-        M_int_state = torch.cat((s_tm1, s_t))          ## Concat of previous state (s_{t-1} and s_{t})
+        # M_int_state = torch.cat((s_tm1, s_t))          ## Concat of previous state (s_{t-1} and s_{t})
 
-        goal = self.M_relu(self.M_goals(M_int_state))   ## Goal generation using prev step and current state
+        goal = self.M_relu(self.M_goals(s_t))   ## Goal generation using prev step and current state
         v_Mt = self.M_value(goal)                       ## Value function
 
         goal = normalize(goal.view(1, goal.shape[0]))
@@ -96,16 +98,25 @@ class Manager(nn.Module):
 
         return v_Mt, goal, s_t                         ## Manager Value, Manager Goal &  Manager state (s_{t})
 
-    def goal_error(self, s_tp1, s_t, g_t, ep_indicator):
+    def goal_error(self, s_t, g_t, ep_indicator):
         """
-        error = cos(s_{t+1} - s_{t}, g_{t})
+        error = cos(s_{t+history} - s_{t}, g_{t})
 
         """
-        # print(s_tp1)
-        cosine_dist = dcos(s_tp1 - s_t, g_t)
+        # print(len(s_t), len(g_t))
+
+        t = self.hist_lim
+
+        ep_indicator = torch.stack(ep_indicator[t: t + self.hist_lim - 1]).prod(dim=0)
+        cosine_dist = dcos(s_t[t + self.hist_lim] - s_t[t], g_t[t])
         cosine_dist = ep_indicator * cosine_dist.unsqueeze(0)
 
         return cosine_dist
+
+        # cosine_dist = dcos(s_tp1 - s_t, g_t)
+        # cosine_dist = ep_indicator * cosine_dist.unsqueeze(0)
+
+        # return cosine_dist
 
 class Worker(nn.Module):
     """
@@ -115,7 +126,7 @@ class Worker(nn.Module):
     softmax(a)                                          ## Action Probabilities
     f_valueW(u_t) = vW_t                                ## Worker Value Function
     """
-    def __init__(self, d, k, num_actions, device):
+    def __init__(self, d, k, num_actions, device, len_hist):
         super(Worker, self).__init__()
 
 
@@ -125,6 +136,7 @@ class Worker(nn.Module):
         self.d2 = 128
         self.dd = 32
         self.knum2 = 20
+        self.hist_lim = len_hist
         
         # self.f_stateW = nn.Linear(self.d, k*num_actions)
         self.f_stateW = nn.Sequential(
@@ -171,13 +183,13 @@ class Worker(nn.Module):
 
     def intrinsic_reward(self, len_hist, goal_history, manager_states, ep_indicator):
 
-        t = len_hist-1
+        t = self.hist_lim
         r_i = torch.zeros(1, 1).to(self.device)
         ep_hist = torch.ones(1, 1).to(self.device)
         ## print(ep_indicator)
         
         for i in range(1, t+1):
-            #print(i, t, t-i)  
+            # print(i, t, t-i)  
             r_i_t = dcos(manager_states[t] - manager_states[t - i], goal_history[t - i])#.unsqueeze(-1)
             #print(r_i_t, ep_hist)
             r_i += (ep_hist * r_i_t)
@@ -208,8 +220,8 @@ class FuNet(nn.Module):
 
         self.pre_ = Preprocessor(self.input_shape, self.device, True)
         self.f_percept = Percept(self.input_shape, self.d, self.device)
-        self.manager = Manager(self.d, self.epsilon, self.device)
-        self.worker = Worker(self.d, self.k, self.num_actions, self.device)
+        self.manager = Manager(self.d, self.epsilon, self.device, self.hist_lim)
+        self.worker = Worker(self.d, self.k, self.num_actions, self.device, self.hist_lim)
 
         self.to(device)
         self.apply(weight_init)
@@ -221,27 +233,27 @@ class FuNet(nn.Module):
         z = self.f_percept(x)
         ## print('XXXXXXXXXXXXXXX\t', z)
         
-        s_tM1 = s_Mt_hist[-1].view(-1)               ## Passing the immediate previous manager state
+        # s_tM1 = s_Mt_hist[-1].view(-1)               ## Passing the immediate previous manager state
 
-        v_Mt, g_t, s_Mt = self.manager(z, s_tM1)
+        v_Mt, g_t, s_Mt = self.manager(z)
         
         goal_history.append(g_t)
         s_Mt_hist.append(s_Mt.unsqueeze(0).detach())     ## No grad
 
-        if len(goal_history) >= self.hist_lim:
+        if len(goal_history) >= self.hist_lim * 2 + 1:
             goal_history.pop(0)
             s_Mt_hist.pop(0)
 
-        v_Wt, a_t = self.worker(z, goal_history)
+        v_Wt, a_t = self.worker(z, goal_history[:self.hist_lim + 1])
         
         return a_t, v_Mt, v_Wt, goal_history, s_Mt_hist
 
 
     def agent_model_init(self):
 
-        goal_history = [init_hidden(self.d, device=self.device, grad=True, rand=True) for _ in range(self.hist_lim)]
-        s_Mt_hist = [init_hidden(self.d, device=self.device) for _ in range(self.hist_lim)]
-        ep_indicators = [torch.ones(1, 1).to(self.device) for _ in range(self.hist_lim)]
+        goal_history = [init_hidden(self.d, device=self.device, grad=True) for _ in range(self.hist_lim*2 + 1)]
+        s_Mt_hist = [init_hidden(self.d, device=self.device) for _ in range(self.hist_lim*2 + 1)]
+        ep_indicators = [torch.ones(1, 1).to(self.device) for _ in range(self.hist_lim*2 + 1)]
 
         return goal_history, s_Mt_hist, ep_indicators
 
@@ -249,7 +261,7 @@ class FuNet(nn.Module):
         return self.worker.intrinsic_reward(self.hist_lim, goal_hist, s_Mt_hist, ep_indicator)
 
     def del_g_theta(self, goal_hist, s_Mt_hist, ep_indicator):
-        return self.manager.goal_error(s_Mt_hist[-1], s_Mt_hist[0], goal_hist[0], ep_indicator[0])
+        return self.manager.goal_error(s_Mt_hist, goal_hist, ep_indicator)
 
 
 def loss_function(db, vMtp1, vWtp1, args):
@@ -258,10 +270,10 @@ def loss_function(db, vMtp1, vWtp1, args):
     rt_w = vWtp1
 
     db.placeholder()  # Fill ret_m, ret_w with empty vals
-    ## print('External Rewards:\n:', db.ext_r_i)
-    ## print('ep_indicator:\n:', db.ep_indicator)
-    ## print('Return Manager:\n', db.rt_m)
-    ## print('Return Worker:\n', db.rt_m)
+    # print('External Rewards:\n:', db.ext_r_i)
+    # print('ep_indicator:\n:', db.ep_indicator)
+    # print('Return Manager:\n', db.rt_m)
+    # print('Return Worker:\n', db.rt_m)
 
     
     for i in reversed(range(args['steps'])):
@@ -270,10 +282,10 @@ def loss_function(db, vMtp1, vWtp1, args):
         # print(i, ret_m, ret_w)
         db.rt_m[i] = ret_m
         db.rt_w[i] = ret_w
-        ## print()
+        # print()
 
-        ## print('Return Manager:\n', db.rt_m)
-        ## print('Return Worker:\n', db.rt_w)
+        # print('Return Manager:\n', db.rt_m)
+        # print('Return Worker:\n', db.rt_w)
     # Optionally, normalize the returns
     db.normalize(['rt_w', 'rt_m'])
 
@@ -288,14 +300,14 @@ def loss_function(db, vMtp1, vWtp1, args):
                                 'goal_error'])
 
     # Calculate advantages, size B x T
-    #print(rewards_intrinsic)
-    #print(ret_m.shape)
-    #print(ret_w.shape)
+    # print(rewards_intrinsic)
+    # print(ret_m.shape)
+    # print(ret_w.shape)
     advantage_w = ret_w + (args['alpha'] * rewards_intrinsic) - value_w
     advantage_m = ret_m - value_m
 
-    #print('Adv Manager:\n', advantage_m)
-    #print('Adv Worker:\n', advantage_w)
+    # print('Adv Manager:\n', advantage_m)
+    # print('Adv Worker:\n', advantage_w)
     # print('entropy\n', entropy)
     # print('logprobs\n', logps)
     # print('goal errors\n', goal_errors)
