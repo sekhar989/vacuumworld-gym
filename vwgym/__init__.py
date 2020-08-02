@@ -95,10 +95,12 @@ class Vectorise(gym.ObservationWrapper):
     def __init__(self, env):
         super(Vectorise,self).__init__(env)
         self.observation_space = gym.spaces.Box(low=0, high=1, shape=(3, env.unwrapped.dimension, env.unwrapped.dimension), dtype=np.uint8)
+        self.dirts = None
             
     def observation(self, grid):
 
         obs = np.zeros(self.observation_space.shape, dtype=self.observation_space.dtype)
+        self.dirts = 0
 
         c = next(iter(grid._get_agents().keys()))
         obs[0, c[1], c[0]] = 255 #mask for the current agent
@@ -109,6 +111,7 @@ class Vectorise(gym.ObservationWrapper):
             
         for c,d in grid._get_dirts().items(): #all dirts
             #print(c,d)
+            self.dirts += 1
             obs[2, c[1], c[0]] = Vectorise.dirt_table[d.colour]
 
         return obs
@@ -122,6 +125,7 @@ class StepWrapper(gym.Wrapper):
         self.ep_len = 0
         self.time_penalty = 0
         self.ep_action_summary = []
+        self.rw_dirts = 0
 
 
     def _get_agent_loc(self, agent_locs):
@@ -134,117 +138,55 @@ class StepWrapper(gym.Wrapper):
 
     def reward(self, obs, action):
 
-        self.ep_len += 1
         self.time_penalty += 1
-
-        agent_loc = self._get_agent_loc(np.where(obs[0,:, :]==255))[0]
-        gr_dirt_loc = self._get_dirt_loc(np.where(obs[2,:, :]==128))
-        or_dirt_loc = self._get_dirt_loc(np.where(obs[2,:, :]==255))
-        # print(agent_loc, 'agent loc')
+        # print(self.env.dirts, self.rw_dirts)
+        # agent_loc = self._get_agent_loc(np.where(obs[0,:, :]==255))[0]
+        # gr_dirt_loc = self._get_dirt_loc(np.where(obs[2,:, :]==128))
+        # or_dirt_loc = self._get_dirt_loc(np.where(obs[2,:, :]==255))
+        # print('------------------------------------------------------')
+        # print(agent_loc,'agent loc')
+        # print(action)
         # print(gr_dirt_loc, 'green dirt loc')
         # print(or_dirt_loc, 'orange dirt loc')
-        dirt_locs = list(itertools.chain.from_iterable([or_dirt_loc, gr_dirt_loc]))
+        # print('------------------------------------------------------')
+        # dirt_locs = list(itertools.chain.from_iterable([or_dirt_loc, gr_dirt_loc]))
+        # print(f'Dirts Cleaned by worker..:  {16 - self.env.dirts}')
+        # print(dirt_locs)
 
-        action = self.action_meanings[action]
-        done = False
-        dead = False
-        blank_hit = 0
+        if self.env.dirts < self.rw_dirts:
+            self.rw_dirts = self.env.dirts
+            self.time_penalty = self.time_penalty - 500
+            if self.env.dirts == 0:
+                print('\nGrid Cleaned !!\n')
+                return 100, True
+            else:
+                return 100, False
 
-        if self.ep_len >= 5000:
-            done = True
-            dead = True
-            print('Time Up...')
-        elif len(dirt_locs) == 0:
-            print('Grid Cleaned !! :)')
-            done = True
-
-        
-        # if agent_loc in dirt_locs and action == 'clean':
-        # # if action == 'clean':
-        #     reward = 10 #- len(dirt_locs) * (self.ep_rewards/self.ep_len)
-        #     self.ep_rewards += reward
-        #     # self.time_penalty = 0
-        #     return reward, done
-        # else:
-        #     reward = -1
-        #     self.ep_rewards += reward
-        #     return reward, done
-
-            # if self.ep_len < 500:
-            #     reward = -1 - self.time_penalty/10 #* (2**(len(dirt_locs))) #- len(dirt_locs) * (self.ep_rewards/self.ep_len)
-            #     self.ep_rewards += reward
-            #     return reward, done
-            # else:
-            #     print('dead...')
-            #     done = True
-            #     reward = -100
-            #     self.ep_rewards += reward
-            #     return reward, done
-
-        #####################################
-        # print(action, agent_loc, dirt_locs)
-        #####################################
-
-        if dead:
-            reward = -20
-            self.ep_rewards += reward
-            return reward, done
-
-        elif agent_loc in dirt_locs and action == 'clean':
-            reward = 20 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
-            blank_hit = 0
-            if len(dirt_locs) == 0:
-                print('Grid Cleaned !! :)')
-                done = True
-                reward += 5
-            self.ep_rewards += reward 
-            return reward, done
-            
-        elif agent_loc in dirt_locs and (action != 'clean' or action == 'idle'):
-            reward = -5 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
-            self.ep_rewards += reward 
-            return reward, done
-
-        elif agent_loc not in dirt_locs and (action == 'clean' or action == 'idle'):
-            reward = -2 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
-            self.ep_rewards += reward 
-            return reward, done
-
-        elif len(dirt_locs) > 0 and action == 'idle':
-            reward = -5 #- round(len(dirt_locs) * (self.ep_rewards/self.ep_len), 3)
-            self.ep_rewards += reward 
-            return reward, done
-
-        elif len(dirt_locs) > 0 and (self.ep_action_summary[-8:].count('turn_right') == 8 or \
-                self.ep_action_summary[-8:].count('turn_left') == 8) or \
-                self.ep_action_summary[-20:].count('move') == 20:
-            # reward = -1 * len(dirt_locs) * int(np.sqrt(self.ep_len))
-            reward = -2 #* int(np.sqrt(self.ep_len)/2)
-            # print('stuck penalty', reward)
-            self.ep_rewards += reward
-            return reward, done
-
+        elif self.time_penalty > 10000:
+            print(f'Time Up !! :(, Dirts Cleaned:  {16 - self.env.dirts}')
+            self.time_penalty = 0
+            return -1, True
         else:
-            # blank_hit += 1
-
-            # if blank_hit == 10:
-            #     reward = -5
-            #     self.ep_rewards += reward
-            #     blank_hit = 0
+            # if self.time_penalty%100 == 0:
+            #     return -1, False
             # else:
-            reward = 0
-            self.ep_rewards += reward
-            return reward, done
+            return -1, False
         
-    def step(self, prev_state, action):
+
+        
+    def step(self, action):
         state, reward, done, _x = self.env.step(action)
-        reward, done = self.reward(prev_state, action)
+        reward, done = self.reward(state, action)
+        self.ep_rewards += reward
+        self.ep_len += 1
+
         self.ep_action_summary.append(self.env.action_meanings[action])
         if done:
             ep_info = {'ep_rewards': self.ep_rewards, 'ep_len': self.ep_len}
             for a in self.env.action_meanings:
                 ep_info[a] = self.ep_action_summary.count(a)
             print(ep_info)
+            print('Episode Rewards:\t', self.ep_rewards)
             self.ep_rewards = 0
             self.ep_len = 0
             self.ep_action_summary = []

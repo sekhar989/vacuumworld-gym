@@ -7,7 +7,8 @@
 import torch
 
 from vwgym.init_utils import *
-from vwgym.fun_lite import *
+# from vwgym.fun_lite import *
+from vwgym.fun import *
 from tensorboardX import SummaryWriter
 from datetime import datetime
 import time
@@ -29,7 +30,7 @@ args = {
             'lr': 25e-4,
             'steps': 400,
             'max_steps': 1e8,
-            'env_reboot':5e5,
+            'env_reboot':5e4,
             'entropy_coef': 0.01,
             'gamma_w': 0.95,
             'gamma_m': 0.999,
@@ -38,33 +39,72 @@ args = {
             'grid_size': 8,
             'd': 256,
             'k': 16,
+            'r':10,
             'len_hist': 10,
             'grad_clip':5.0,
-            'writer': True
+            'writer': True,
+            'num_worker':16
         }
 
 
-def train(args, device):
+def train(args, device, reload_model=True):
 
-    env, input_shape = make_env(args['grid_size'])
+    env, input_shape = make_env(args['grid_size'], args['num_worker'])
     # print(input_shape)
-    num_actions = env.action_space.n
+    num_actions = env[0].action_space.n
 
-    f_net = FuNet(input_shape, args['d'], args['len_hist'], args['eps'], args['k'], num_actions, device)
-    optimizer = torch.optim.Adam(f_net.parameters(), lr=args['lr'], eps=1e-5)
+    # f_net = FuNet(input_shape, args['d'],
+    #                 args['len_hist'], 
+    #                 args['eps'], 
+    #                 args['k'], 
+    #                 num_actions, 
+    #                 args['num_worker'],
+    #                 device)
+
+    f_net = FuNet(
+                    input_shape=input_shape, 
+                    d=args['d'], 
+                    len_hist=args['len_hist'], 
+                    epsilon=args['eps'], 
+                    k=args['k'], 
+                    num_actions=num_actions, 
+                    dilation=args['r'],
+                    num_workers=args['num_worker'],
+                    device=device)
+
+    print('Model Summary...\n')
+    print('-'*400)
+    print(f_net)
+    print('*'*400)
+    optimizer = torch.optim.RMSprop(f_net.parameters(), lr=args['lr'], eps=1e-5)
     goal_history, s_Mt_hist, ep_binary = f_net.agent_model_init()
 
     # if last_checkpoint:
     #     f_net.load
 
-    prev_x = env.reset()
+    # prev_x = env.reset()
+    x = np.array([e.reset() for e in env])
+    
+    for e in env:
+        e.rw_dirts = e.dirts
+        print(f'Dirts Present..:{e.rw_dirts}')
+
+    # prev_x = normalize_input(prev_x)
 
     # reset_history = [prev_x]
-    x = torch.from_numpy(prev_x).float()
+    x = torch.from_numpy(x).float().to(device)
+
     step = 0
     switch = 0.
     tr_ep = 0
     score = []
+
+    if reload_model:
+        model_path = 'saved_model/vwgym_f_net_last_checkpoint_02.pt'
+        checkpoint = torch.load(model_path)
+        f_net.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optim'])
+
 
     if args['writer']:
         dtm = datetime.now()
@@ -73,6 +113,8 @@ def train(args, device):
 
     while step < args['max_steps']:
 
+        # Detaching LSTMs and goals
+        f_net.repackage_hidden()
         goal_history = [g.detach() for g in goal_history]
 
         db = mini_db(keys=[ 'ext_r_i', 'int_r_i',
@@ -84,49 +126,64 @@ def train(args, device):
 
         for __ in tqdm(range(args['steps'])):
 
-            action_probs, v_Mt, v_Wt, goal_history, s_Mt_hist = f_net(x, goal_history, s_Mt_hist)
-            # print(action_probs)
+            # print('prev_x\n', prev_x, '\n')
+            # print('x - before\n:', x)
+            optimizer.zero_grad()
+            action_probs, v_Mt, v_Wt, goal_history, s_Mt_hist = f_net(x, goal_history, s_Mt_hist, ep_binary[-1])
+            # print(action_probs)   
             a_t, log_p, entropy = take_action(action_probs)
             # print('previous:\n', prev_x)
-            x, reward, done, ep_info = env.step(prev_x, a_t[0])
+            # x, reward, done, ep_info = env.step(a_t[0])
+            x, reward, done, ep_info = take_step(a_t, env, device)
+            # print(reward, done)
 
+            # print('x - after\n:', x)
             # print('Done\t:', done)
             # print('action:\t', env.action_meanings[a_t])
             # print('post:\n', x)
             # print('-'*50)
-            if done:
-                if step//args['env_reboot'] > switch:
-                    env, _ = make_env(args['grid_size'])
-                    x = env.reset()
-                    switch = step//args['env_reboot']
-                    print('Env Switch....')
-                else:
-                    x = env.reset()
+            # if done:
+            #     if step//args['env_reboot'] > switch:
+            #         env, _ = make_env(args['grid_size'])
+            #         x = env.reset()
+            #         env.rw_dirts = env.dirts
+            #         switch = step//args['env_reboot']
+            #         print('Env Switch....')
+            #     else:
+            #         x = env.reset()
+            #         env.rw_dirts = env.dirts
                 
-                prev_x = x
-                # reset_history.append(prev_x)
-                score.append(600/ep_info['ep_len'])
-                score  = score[-100:]
-                if args['writer']:
-                    writer.add_scalars('rewards/ep_rewards', {'rewards': ep_info['ep_rewards']}, step)
-                    writer.add_scalars('rewards/avg_score', {'score': np.mean(score[-100:])}, step)
-                    writer.add_scalars('action/action_summary', {'move': ep_info['move']}, step)
-                    writer.add_scalars('action/action_summary', {'turn_left': ep_info['turn_left']}, step)
-                    writer.add_scalars('action/action_summary', {'turn_right': ep_info['turn_right']}, step)
-                    writer.add_scalars('action/action_summary', {'clean': ep_info['clean']}, step)
-                    writer.add_scalars('action/action_summary', {'idle': ep_info['idle']}, step)
+            #     # prev_x = x
+            #     # reset_history.append(prev_x)
+            #     score.append(600/ep_info['ep_len'])
+            #     score  = score[-100:]
+            #     if args['writer']:
+            #         writer.add_scalars('rewards/ep_rewards', {'rewards': ep_info['ep_rewards']}, step)
+            #         writer.add_scalars('rewards/avg_score', {'score': np.mean(score[-100:])}, step)
+            #         writer.add_scalars('action/action_summary', {'move': ep_info['move']}, step)
+            #         writer.add_scalars('action/action_summary', {'turn_left': ep_info['turn_left']}, step)
+            #         writer.add_scalars('action/action_summary', {'turn_right': ep_info['turn_right']}, step)
+            #         writer.add_scalars('action/action_summary', {'clean': ep_info['clean']}, step)
+            #         writer.add_scalars('action/action_summary', {'idle': ep_info['idle']}, step)
 
-                tr_ep += 1
-                print(f'Ep. {tr_ep} Completed')
-                print(f"total steps = {step} \t| reward = {round(ep_info['ep_rewards'], 2)} \t| ep_score = {round(600/ep_info['ep_len'], 2)} \t| last 100 mean score = {round(np.mean(score[-100:]), 2)}")
+            #     tr_ep += 1
+            #     print(f'Ep. {tr_ep} Completed')
+            #     print(f"total steps = {step} \t| reward = {round(ep_info['ep_rewards'], 2)} \t| ep_score = {round(600/ep_info['ep_len'], 2)} \t| last 100 mean score = {round(np.mean(score[-100:]), 2)}")
                 # f"> ep = {self.n_eps} |
-            else:
-                prev_x = x
-            x = torch.from_numpy(x).float()
-            ep = torch.FloatTensor([1.0 - done]).to(device)
+            # else:
+            #     prev_x = x
+            tr_ep += args['num_worker']
+            
+            for ep_d in ep_info:
+                if ep_d['ep_rewards'] is not None:
+                    print(f'Ep. {tr_ep} Completed .. {datetime.now().time()}')
+                    print(f"reward = {round(ep_d['ep_rewards'], 2)} \t| ep_score = {round(600/ep_d['ep_len'], 2)}")
+                    writer.add_scalars('rewards/ep_rewards', {'rewards': ep_d['ep_rewards']}, step)
+            # x = torch.from_numpy(x/255).float().to(device)
+            ep = torch.FloatTensor(1.0 - done).unsqueeze(-1).to(device)
             # print('EpisodeStatus:\t', ep)
             ep_binary.pop(0)
-            ep_binary.append(ep.view(1, 1))
+            ep_binary.append(ep)
 
             # print('ext_r_i', torch.FloatTensor([reward]).to(device))
             # print('int_r_i', f_net.int_reward(goal_history, s_Mt_hist, ep_binary),)
@@ -155,11 +212,10 @@ def train(args, device):
 
 
         with torch.no_grad():
-            _, v_Mtp1, v_Wtp1, _, _ = f_net(x, goal_history, s_Mt_hist)
+            _, v_Mtp1, v_Wtp1, _, _ = f_net(x, goal_history, s_Mt_hist, ep_binary[-1], save=False)
             v_Mtp1 = v_Mtp1.detach()
             v_Wtp1 = v_Wtp1.detach()
 
-        optimizer.zero_grad()
         loss, loss_summary = loss_function(db, v_Mtp1, v_Wtp1, args)
 
         # print('Sleeping.....')
@@ -176,7 +232,7 @@ def train(args, device):
                 'args': args,
                 'processor_mean': f_net.pre_.rms.mean,
                 'optim': optimizer.state_dict()},
-                f'saved_model/vwgym_f_net_last_checkpoint_02.pt')
+                f'saved_model/vwgym_f_net_full_ckpt_02.pt')
 
         loss.backward()
         # torch.nn.utils.clip_grad_norm_(f_net.parameters(), args['grad_clip'])
@@ -187,7 +243,7 @@ def train(args, device):
         'args': args,
         'processor_mean': f_net.pre_.rms.mean,
         'optim': optimizer.state_dict()},
-        f'saved_model/vwgym_f_net.pt')
+        f'saved_model/vwgym_f_net_full_ckpt_02.pt')
 
     # for h, rh in enumerate(reset_history):
     #     print('run number..\t', h)
@@ -195,4 +251,4 @@ def train(args, device):
     #     print('*'*50)
 
 if __name__ == '__main__':
-    train(args, device)
+    train(args, device, False)

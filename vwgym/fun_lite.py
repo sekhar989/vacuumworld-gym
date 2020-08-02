@@ -38,19 +38,60 @@ class Percept(nn.Module):
         h_out = int((height - (3 - 1) ))
         w_out = int((width - (3 - 1) ))
 
-        self.percept = nn.Sequential(
-            nn.Conv2d(in_channels = channels, out_channels = 16, kernel_size= (3, 3)),
-            nn.ReLU(),
-            Flatten(),
-            nn.Linear(h_out * w_out * 16, d),
-            nn.ReLU()
-        )
+        self.conv_1 = nn.Conv2d(in_channels=channels, out_channels=256, kernel_size=2)
+        self.conv_2 = nn.Conv2d(in_channels=256, out_channels=128, kernel_size=2)
+
+        self.max_pool_1 = nn.MaxPool2d(2)
+
+        self.fc_1 = nn.Linear(in_features=128, out_features=256)
+        self.fc_2 = nn.Linear(in_features=27, out_features=256)
+        self.percept = nn.Linear(in_features=9, out_features=256)
+        self.flat = nn.modules.Flatten()
+
+        # self.percept = nn.Sequential(
+        #     nn.Conv2d(in_channels = channels, out_channels = 256, kernel_size= (3, 3)),
+        #     nn.ReLU(),
+        #     nn.MaxPool2d(3)
+        #     nn.Conv2d(in_channels = 256, out_channels = 128, kernel_size= (3, 3)),
+        #     # Flatten(),
+        #     nn.Linear(h_out * w_out * 16, d),
+        #     # nn.ReLU()
+        # )
 
     def forward(self, x):
+        
         # x = x.view(-1)
-        z = self.percept(x.unsqueeze(0))
+        # z = F.relu(self.conv_1(x))
+        # z = self.max_pool_1(z)
+
+        # z = F.relu(self.conv_2(z))
+        # z = self.max_pool_1(z)
+        z = self.flat(x)
+        # z = F.relu(self.fc_1(z))
+        # z = F.relu(self.fc_2(z))
+        z = F.relu(self.percept(z))
+        # z = self.(x.unsqueeze(0))
+
+        # t = self.conv1(t)
+        # t = F.relu(t)
+        # t = F.max_pool2d(t, kernel_size=2, stride=2)
+
+        # # conv 2
+        # t = self.conv2(t)
+        # t = F.relu(t)
+        # t = F.max_pool2d(t, kernel_size=2, stride=2)
+
+        # # fc1
+        # t = t.reshape(-1, 12*4*4)
+        # t = self.fc1(t)
+        # t = F.relu(t)
+
+        # # fc2
+        # t = self.fc2(t)
+        # t = F.relu(t)
         ## print('Inside Percept XXXXXXXXXXXXXXX:\n', z)
-        return z.view(-1)
+        # print(z.shape)
+        return z
 
 
 class Manager(nn.Module):
@@ -72,7 +113,12 @@ class Manager(nn.Module):
         self.M_space = nn.Linear(self.d, self.d)
         self.M_relu = nn.ReLU()
         self.M_tanh = nn.Tanh()
-        self.M_goals = nn.Linear(self.d, self.d)
+        self.M_goals = nn.Sequential(
+                                        nn.Linear(self.d, self.d),
+                                        nn.ReLU(),
+                                        nn.Linear(self.d, self.d)
+                                    )
+
         self.M_value = nn.Linear(self.d, 1)
         # self.M_value = nn.Sequential(
         #                                 nn.Linear(self.d, self.dd),
@@ -89,8 +135,9 @@ class Manager(nn.Module):
 
         goal = self.M_relu(self.M_goals(s_t))   ## Goal generation using prev step and current state
         v_Mt = self.M_value(goal)                       ## Value function
-
-        goal = normalize(goal.view(1, goal.shape[0]))
+        # print(goal)
+        goal = normalize(goal)
+        # print(goal)
         s_t = s_t.detach()
 
         if (self.epsilon > torch.rand(1)[0]):
@@ -108,6 +155,7 @@ class Manager(nn.Module):
         t = self.hist_lim
 
         ep_indicator = torch.stack(ep_indicator[t: t + self.hist_lim - 1]).prod(dim=0)
+        # print(s_t[t + self.hist_lim], s_t[t], g_t[t])
         cosine_dist = dcos(s_t[t + self.hist_lim] - s_t[t], g_t[t])
         cosine_dist = ep_indicator * cosine_dist.unsqueeze(0)
 
@@ -126,13 +174,14 @@ class Worker(nn.Module):
     softmax(a)                                          ## Action Probabilities
     f_valueW(u_t) = vW_t                                ## Worker Value Function
     """
-    def __init__(self, d, k, num_actions, device, len_hist):
+    def __init__(self, d, k, num_actions, device, len_hist, num_workers):
         super(Worker, self).__init__()
 
 
         self.num_actions = num_actions
         self.k = k
         self.d = d
+        self.b = num_workers
         self.d2 = 128
         self.dd = 32
         self.knum2 = 20
@@ -142,7 +191,9 @@ class Worker(nn.Module):
         self.f_stateW = nn.Sequential(
                                         nn.Linear(self.d, self.d2),
                                         nn.ReLU(),
-                                        nn.Linear(self.d2, k*num_actions),
+                                        nn.Linear(self.d2, self.dd),
+                                        nn.ReLU(),
+                                        nn.Linear(self.dd, k*num_actions),
                                         nn.ReLU()
                                     )
         self.phi = nn.Linear(d, k, bias=False)
@@ -167,45 +218,45 @@ class Worker(nn.Module):
 
         w = self.phi(g_t)                                 ## phi(goals) = w ---- Manager Goals sent to Worker
         ## print(w.shape)
-        W_u_t = W_u_t.view(self.k, self.num_actions)
+        W_u_t = W_u_t.view(W_u_t.shape[0], self.k, self.num_actions)
         ## print(W_u_t.shape)
         
-        ## print('w_shape:\t', w.shape, 'Ut_shape', W_u_t.shape)
+        # print('w_shape:\t', w.shape, 'Ut_shape', W_u_t.shape)
         ## print(w)
 
         ## print(W_u_t)
-        # a_t = torch.einsum("bk, bka -> ba", w, W_u_t).softmax(dim=-1)
-        ## print(a_t)
-        a_t = nn.functional.softmax(torch.mm(w, W_u_t), dim=1)
+        a_t = F.softmax((torch.einsum("bk, bka -> ba", w, W_u_t)), dim=1)
+        # print(a_t)
+        # a_t = nn.functional.softmax(torch.mm(w, W_u_t), dim=1)
         
         return v_Wt, a_t
 
 
-    def intrinsic_reward(self, len_hist, goal_history, manager_states, ep_indicator):
+    def intrinsic_reward(self, goal_history, manager_states, ep_indicator):
 
         t = self.hist_lim
-        r_i = torch.zeros(1, 1).to(self.device)
-        ep_hist = torch.ones(1, 1).to(self.device)
+        r_i = torch.zeros(self.b, 1).to(self.device)
+        ep_hist = torch.ones(self.b, 1).to(self.device)
         ## print(ep_indicator)
         
         for i in range(1, t+1):
             # print(i, t, t-i)  
-            r_i_t = dcos(manager_states[t] - manager_states[t - i], goal_history[t - i])#.unsqueeze(-1)
-            #print(r_i_t, ep_hist)
+            r_i_t = dcos(manager_states[t] - manager_states[t - i], goal_history[t - i]).unsqueeze(-1)
+            # print(r_i_t, ep_hist)
             r_i += (ep_hist * r_i_t)
             ep_hist = ep_hist * ep_indicator[t - i]
             ## print('post_update', ep_hist)
 
         r_i = r_i.detach().view(-1)
-        #print('Final intrinsic_reward:\t', r_i)
-        return r_i / len_hist
+        # print('Final intrinsic_reward:\t', r_i)
+        return r_i / self.hist_lim
 
 
 class FuNet(nn.Module):
     """
 
     """
-    def __init__(self, input_shape, d, len_hist, epsilon, k, num_actions, device):
+    def __init__(self, input_shape, d, len_hist, epsilon, k, num_actions, num_workers, device):
         super(FuNet, self).__init__()
         
         self.input_shape = input_shape
@@ -217,11 +268,12 @@ class FuNet(nn.Module):
         
         self.k = k
         self.num_actions = num_actions
+        self.b = num_workers
 
         self.pre_ = Preprocessor(self.input_shape, self.device, True)
         self.f_percept = Percept(self.input_shape, self.d, self.device)
         self.manager = Manager(self.d, self.epsilon, self.device, self.hist_lim)
-        self.worker = Worker(self.d, self.k, self.num_actions, self.device, self.hist_lim)
+        self.worker = Worker(self.d, self.k, self.num_actions, self.device, self.hist_lim, self.b)
 
         self.to(device)
         self.apply(weight_init)
@@ -229,7 +281,7 @@ class FuNet(nn.Module):
 
     def forward(self, x, goal_history, s_Mt_hist):
         
-        x = self.pre_(x)
+        # x = normalize_input(x)
         z = self.f_percept(x)
         ## print('XXXXXXXXXXXXXXX\t', z)
         
@@ -237,12 +289,16 @@ class FuNet(nn.Module):
 
         v_Mt, g_t, s_Mt = self.manager(z)
         
-        goal_history.append(g_t)
-        s_Mt_hist.append(s_Mt.unsqueeze(0).detach())     ## No grad
 
         if len(goal_history) >= self.hist_lim * 2 + 1:
             goal_history.pop(0)
             s_Mt_hist.pop(0)
+
+        # print(g_t, g_t.shape)
+        # print(s_Mt, s_Mt.shape)
+
+        goal_history.append(g_t)
+        s_Mt_hist.append(s_Mt.detach())     ## No grad
 
         v_Wt, a_t = self.worker(z, goal_history[:self.hist_lim + 1])
         
@@ -251,14 +307,14 @@ class FuNet(nn.Module):
 
     def agent_model_init(self):
 
-        goal_history = [init_hidden(self.d, device=self.device, grad=True) for _ in range(self.hist_lim*2 + 1)]
-        s_Mt_hist = [init_hidden(self.d, device=self.device) for _ in range(self.hist_lim*2 + 1)]
-        ep_indicators = [torch.ones(1, 1).to(self.device) for _ in range(self.hist_lim*2 + 1)]
+        goal_history = [init_hidden(self.b, self.d, device=self.device, grad=True) for _ in range(self.hist_lim*2 + 1)]
+        s_Mt_hist = [init_hidden(self.b, self.d, device=self.device) for _ in range(self.hist_lim*2 + 1)]
+        ep_indicators = [torch.ones(self.b, 1).to(self.device) for _ in range(self.hist_lim*2 + 1)]
 
         return goal_history, s_Mt_hist, ep_indicators
 
     def int_reward(self, goal_hist, s_Mt_hist, ep_indicator):
-        return self.worker.intrinsic_reward(self.hist_lim, goal_hist, s_Mt_hist, ep_indicator)
+        return self.worker.intrinsic_reward(goal_hist, s_Mt_hist, ep_indicator)
 
     def del_g_theta(self, goal_hist, s_Mt_hist, ep_indicator):
         return self.manager.goal_error(s_Mt_hist, goal_hist, ep_indicator)
@@ -287,6 +343,8 @@ def loss_function(db, vMtp1, vWtp1, args):
         # print('Return Manager:\n', db.rt_m)
         # print('Return Worker:\n', db.rt_w)
     # Optionally, normalize the returns
+
+    # print(ret_m, ret_w)
     db.normalize(['rt_w', 'rt_m'])
 
     rewards_intrinsic, value_m, value_w, ret_w, ret_m, logps, entropy, \

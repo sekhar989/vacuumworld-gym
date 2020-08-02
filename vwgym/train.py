@@ -35,32 +35,53 @@ args = {
             'gamma_m': 0.999,
             'alpha': 0.85,
             'eps': 0.1,
-            'grid_size': 5,
+            'grid_size': 3,
             'd': 256,
             'k': 16,
             'len_hist': 10,
             'grad_clip':5.0,
-            'writer': True
+            'writer': True,
+            'num_worker': 16
+
         }
 
 
 def train(args, device):
 
-    env, input_shape = make_env(args['grid_size'])
+    env, input_shape = make_env(args['grid_size'], args['num_worker'])
     # print(input_shape)
-    num_actions = env.action_space.n
+    num_actions = env[0].action_space.n
 
-    f_net = FuNet(input_shape, args['d'], args['len_hist'], args['eps'], args['k'], num_actions, device)
-    optimizer = torch.optim.Adam(f_net.parameters(), lr=args['lr'], eps=1e-5)
+    f_net = FuNet(input_shape, args['d'],
+                    args['len_hist'], 
+                    args['eps'], 
+                    args['k'], 
+                    num_actions, 
+                    args['num_worker'],
+                    device)
+
+    print('Model Summary...\n')
+    print('-'*400)
+    print(f_net)
+    print('*'*400)
+    optimizer = torch.optim.RMSprop(f_net.parameters(), lr=args['lr'], eps=1e-5)
     goal_history, s_Mt_hist, ep_binary = f_net.agent_model_init()
 
     # if last_checkpoint:
     #     f_net.load
 
-    prev_x = env.reset()
+    # prev_x = env.reset()
+    x = np.array([e.reset() for e in env])
+    
+    for e in env:
+        e.rw_dirts = e.dirts
+        print(f'Dirts Present..:{e.rw_dirts}')
+
+    # prev_x = normalize_input(prev_x)
 
     # reset_history = [prev_x]
-    x = torch.from_numpy(prev_x).float()
+    x = torch.from_numpy(x).float().to(device)
+
     step = 0
     switch = 0.
     tr_ep = 0
@@ -82,51 +103,67 @@ def train(args, device):
                             'goal_error', 'ep_indicator',
                             'adv_m', 'adv_w' ], space=args['steps'])
 
-        for __ in tqdm(range(args['steps'])):
+        for __ in range(args['steps']):
+
+            # print('prev_x\n', prev_x, '\n')
+            # print('x - before\n:', x)
+            optimizer.zero_grad()
 
             action_probs, v_Mt, v_Wt, goal_history, s_Mt_hist = f_net(x, goal_history, s_Mt_hist)
+            
             # print(action_probs)
             a_t, log_p, entropy = take_action(action_probs)
             # print('previous:\n', prev_x)
-            x, reward, done, ep_info = env.step(prev_x, a_t[0])
+            # print(a_t, log_p, entropy)
+            
+            x, reward, done, ep_info = take_step(a_t, env, device)
+            # print(x, reward, done, ep_info)
+            # print(np.sum(done))
 
+            # print('x - after\n:', x)
             # print('Done\t:', done)
             # print('action:\t', env.action_meanings[a_t])
             # print('post:\n', x)
             # print('-'*50)
-            if done:
-                if step//args['env_reboot'] > switch:
-                    env, _ = make_env(args['grid_size'])
-                    x = env.reset()
-                    switch = step//args['env_reboot']
-                    print('Env Switch....')
-                else:
-                    x = env.reset()
+            # if done:
+            #     if step//args['env_reboot'] > switch:
+            #         env, _ = make_env(args['grid_size'])
+            #         x = env.reset()
+            #         switch = step//args['env_reboot']
+            #         print('Env Switch....')
+            #     else:
+            #         x = env.reset()
                 
-                prev_x = x
+                # prev_x = x
                 # reset_history.append(prev_x)
-                score.append(600/ep_info['ep_len'])
-                score  = score[-100:]
-                if args['writer']:
-                    writer.add_scalars('rewards/ep_rewards', {'rewards': ep_info['ep_rewards']}, step)
-                    writer.add_scalars('rewards/avg_score', {'score': np.mean(score[-100:])}, step)
-                    writer.add_scalars('action/action_summary', {'move': ep_info['move']}, step)
-                    writer.add_scalars('action/action_summary', {'turn_left': ep_info['turn_left']}, step)
-                    writer.add_scalars('action/action_summary', {'turn_right': ep_info['turn_right']}, step)
-                    writer.add_scalars('action/action_summary', {'clean': ep_info['clean']}, step)
-                    writer.add_scalars('action/action_summary', {'idle': ep_info['idle']}, step)
+                # score.append(600/ep_info['ep_len'])
+                # score  = score[-100:]
+                # if args['writer']:
+                #     writer.add_scalars('rewards/ep_rewards', {'rewards': ep_info['ep_rewards']}, step)
+                    # writer.add_scalars('rewards/avg_score', {'score': np.mean(score[-100:])}, step)
+                    # writer.add_scalars('action/action_summary', {'move': ep_info['move']}, step)
+                    # writer.add_scalars('action/action_summary', {'turn_left': ep_info['turn_left']}, step)
+                    # writer.add_scalars('action/action_summary', {'turn_right': ep_info['turn_right']}, step)
+                    # writer.add_scalars('action/action_summary', {'clean': ep_info['clean']}, step)
+                    # writer.add_scalars('action/action_summary', {'idle': ep_info['idle']}, step)
 
-                tr_ep += 1
-                print(f'Ep. {tr_ep} Completed')
-                print(f"total steps = {step} \t| reward = {round(ep_info['ep_rewards'], 2)} \t| ep_score = {round(600/ep_info['ep_len'], 2)} \t| last 100 mean score = {round(np.mean(score[-100:]), 2)}")
+            tr_ep += args['num_worker']
+            
+            for ep_d in ep_info:
+                if ep_d['ep_rewards'] is not None:
+                    print(f'Ep. {tr_ep} Completed .. {datetime.now().time()}')
+                    print(f"reward = {round(ep_d['ep_rewards'], 2)} \t| ep_score = {round(600/ep_d['ep_len'], 2)}")
+                    writer.add_scalars('rewards/ep_rewards', {'rewards': ep_d['ep_rewards']}, step)
                 # f"> ep = {self.n_eps} |
-            else:
-                prev_x = x
-            x = torch.from_numpy(x).float()
-            ep = torch.FloatTensor([1.0 - done]).to(device)
+            # else:
+            #     prev_x = x
+            # x = torch.from_numpy(x/255).float().to(device)
+            
+            ep = torch.FloatTensor(1.0 - done).unsqueeze(-1).to(device)
             # print('EpisodeStatus:\t', ep)
             ep_binary.pop(0)
-            ep_binary.append(ep.view(1, 1))
+            ep_binary.append(ep)
+            # print(ep_binary)
 
             # print('ext_r_i', torch.FloatTensor([reward]).to(device))
             # print('int_r_i', f_net.int_reward(goal_history, s_Mt_hist, ep_binary),)
@@ -139,7 +176,7 @@ def train(args, device):
 
             # print('---------------------------------------------------------------------')
 
-            db.update({'ext_r_i': torch.FloatTensor([reward]).to(device).unsqueeze(0),
+            db.update({'ext_r_i': torch.FloatTensor(reward).to(device).unsqueeze(0),
                     'int_r_i': f_net.int_reward(goal_history, s_Mt_hist, ep_binary).unsqueeze(0),
                     'v_m': v_Mt.unsqueeze(0),
                     'v_w': v_Wt.unsqueeze(0),
@@ -152,6 +189,9 @@ def train(args, device):
             step += 1
             # print(step)
             # ep_binary = [e.detach() for e in ep_binary]
+            # if step == 10:
+            # print('Sleeping...')
+            # time.sleep(10)
 
 
         with torch.no_grad():
@@ -159,11 +199,9 @@ def train(args, device):
             v_Mtp1 = v_Mtp1.detach()
             v_Wtp1 = v_Wtp1.detach()
 
-        optimizer.zero_grad()
+        
         loss, loss_summary = loss_function(db, v_Mtp1, v_Wtp1, args)
 
-        # print('Sleeping.....')
-        # time.sleep(600)
         
         if args['writer']:
             writer.add_scalars('loss/total_loss',{'total_loss': loss_summary['loss/total_fun_loss']},step)
@@ -181,6 +219,7 @@ def train(args, device):
         loss.backward()
         # torch.nn.utils.clip_grad_norm_(f_net.parameters(), args['grad_clip'])
         optimizer.step()
+
 
     torch.save({
         'model': f_net.state_dict(),
