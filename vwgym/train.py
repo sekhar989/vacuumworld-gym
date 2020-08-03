@@ -64,7 +64,7 @@ def train(args, device):
     print('-'*400)
     print(f_net)
     print('*'*400)
-    optimizer = torch.optim.RMSprop(f_net.parameters(), lr=args['lr'], eps=1e-5)
+    optimizer = torch.optim.Adam(f_net.parameters(), lr=args['lr'], eps=1e-5)
     goal_history, s_Mt_hist, ep_binary = f_net.agent_model_init()
 
     # if last_checkpoint:

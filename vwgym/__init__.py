@@ -26,11 +26,11 @@ import vacuumworld.vwagent
 import itertools
 
 class VacuumWorld(gym.Env):
-    """ 
+    """
         An OpenAI gym wrapper around the Vacuum World Environment. See OpenAI gym API details: https://gym.openai.com/
         Defined for a single (white) agent. Fully observable.
     """
-    
+
     def __init__(self, dimension, grid=None):
         """
 
@@ -42,7 +42,7 @@ class VacuumWorld(gym.Env):
             grid = vw.random_grid(dimension, 1, 0, 0, 0, dimension, dimension)
         self.__initial_grid = copy.deepcopy(grid)
         self.env = GridEnvironment(GridAmbient(copy.deepcopy(self.__initial_grid), {'white':None}))
- 
+
         self.actions = [action.move(), action.clean(), action.turn(direction.left), action.turn(direction.right), action.idle()]
         self.action_meanings = ['move', 'clean', 'turn_left', 'turn_right', 'idle']
 
@@ -63,16 +63,16 @@ class VacuumWorld(gym.Env):
             self.env.physics.execute(self.env, [a])
 
         return self.state(), 0., False, None
-    
+
     def state(self):
         return copy.deepcopy(self.env.ambient.grid)
-   
+
     def reset(self):
         self.env = GridEnvironment(GridAmbient(copy.deepcopy(self.__initial_grid), {'white':None}))
         return self.state()
 
 class VacuumWorldPO(VacuumWorld):
-    """ 
+    """
         Partially Observable version of the VacuumWorld environment, observations are as seen by the agent (2 x 3 or 3 x 2).
     """
 
@@ -81,8 +81,8 @@ class VacuumWorldPO(VacuumWorld):
         return self.env.processes[0].get_perception(self.env.ambient.grid, agent)
 
 class Vectorise(gym.ObservationWrapper):
-    """ 
-        Vectorised version of the VacuumWorld environment. Converts the grid into a CHW [0-255] image. 
+    """
+        Vectorised version of the VacuumWorld environment. Converts the grid into a CHW [0-255] image.
 
             Channel[0]: Agent Position
             Channel[1]: Agent Orientation
@@ -91,12 +91,12 @@ class Vectorise(gym.ObservationWrapper):
 
     dirt_table = {vwc.colour.green:128, vwc.colour.orange:255}
     orientation_table = {vwc.orientation.north:64,vwc.orientation.east:128,vwc.orientation.south:192,vwc.orientation.west:255}
-    
+
     def __init__(self, env):
         super(Vectorise,self).__init__(env)
         self.observation_space = gym.spaces.Box(low=0, high=1, shape=(3, env.unwrapped.dimension, env.unwrapped.dimension), dtype=np.uint8)
         self.dirts = None
-            
+
     def observation(self, grid):
 
         obs = np.zeros(self.observation_space.shape, dtype=self.observation_space.dtype)
@@ -104,11 +104,11 @@ class Vectorise(gym.ObservationWrapper):
 
         c = next(iter(grid._get_agents().keys()))
         obs[0, c[1], c[0]] = 255 #mask for the current agent
-        
+
         for c,a in grid._get_agents().items(): #all agents
             #print(c,a)
-            obs[1, c[1], c[0]] = Vectorise.orientation_table[a.orientation] 
-            
+            obs[1, c[1], c[0]] = Vectorise.orientation_table[a.orientation]
+
         for c,d in grid._get_dirts().items(): #all dirts
             #print(c,d)
             self.dirts += 1
@@ -118,7 +118,7 @@ class Vectorise(gym.ObservationWrapper):
 
 
 class StepWrapper(gym.Wrapper):
-    
+
     def __init__(self, env):
         super(StepWrapper, self).__init__(env)
         self.ep_rewards = 0
@@ -163,7 +163,7 @@ class StepWrapper(gym.Wrapper):
                 return 100, False
 
         elif self.time_penalty > 10000:
-            print(f'Time Up !! :(, Dirts Cleaned:  {16 - self.env.dirts}')
+            print(f'Time Up !! :(, Dirts Cleaned:  {6 - self.env.dirts}')
             self.time_penalty = 0
             return -1, True
         else:
@@ -171,9 +171,9 @@ class StepWrapper(gym.Wrapper):
             #     return -1, False
             # else:
             return -1, False
-        
 
-        
+
+
     def step(self, action):
         state, reward, done, _x = self.env.step(action)
         reward, done = self.reward(state, action)

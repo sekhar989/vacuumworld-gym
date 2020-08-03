@@ -64,7 +64,7 @@ class mini_db:
         return map(lambda x: torch.stack(x, dim=0), data)
         
 
-def make_env(grid_size, num_env, vectorize=True, random_seed=False):
+def make_env(grid_size, num_env, vectorize=True, random_seed=True):
 
     """
     Initializing the VacuumWorld Environment
@@ -141,15 +141,15 @@ def take_step(actions, envs, device):
     return x_, np.array(reward_), np.array(done_), ep_info_
 
 
-# def init_hidden(num_workers, dim, device, grad=False, rand=False):
-#     if rand:
-#         return torch.rand(num_workers, dim, requires_grad=grad).to(device)
-#     else:
-#         return torch.zeros(num_workers, dim, requires_grad=grad).to(device)
+def init_hidden(num_workers, dim, device, grad=False, rand=False):
+    if rand:
+        return torch.rand(num_workers, dim, requires_grad=grad).to(device)
+    else:
+        return torch.zeros(num_workers, dim, requires_grad=grad).to(device)
 
-def init_hidden(n_workers, h_dim, device, grad=False):
-    return (torch.zeros(n_workers, h_dim, requires_grad=grad).to(device),
-            torch.zeros(n_workers, h_dim, requires_grad=grad).to(device))
+# def init_hidden(n_workers, h_dim, device, grad=False):
+#     return (torch.zeros(n_workers, h_dim, requires_grad=grad).to(device),
+#             torch.zeros(n_workers, h_dim, requires_grad=grad).to(device))
 
 
 def init_obj(dim, hist, device):

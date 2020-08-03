@@ -45,7 +45,7 @@ class Percept(nn.Module):
 
         self.fc_1 = nn.Linear(in_features=128, out_features=256)
         self.fc_2 = nn.Linear(in_features=27, out_features=256)
-        self.percept = nn.Linear(in_features=9, out_features=256)
+        self.percept = nn.Linear(in_features=27, out_features=256)
         self.flat = nn.modules.Flatten()
 
         # self.percept = nn.Sequential(
@@ -345,10 +345,11 @@ def loss_function(db, vMtp1, vWtp1, args):
     # Optionally, normalize the returns
 
     # print(ret_m, ret_w)
-    db.normalize(['rt_w', 'rt_m'])
+    # db.normalize(['rt_w', 'rt_m'])
 
-    rewards_intrinsic, value_m, value_w, ret_w, ret_m, logps, entropy, \
-        goal_errors = db.stack(['int_r_i', 
+    ext_r_i, rewards_intrinsic, value_m, value_w, ret_w, ret_m, logps, entropy, \
+        goal_errors = db.stack(['ext_r_i'
+,                                'int_r_i', 
                                 'v_m', 
                                 'v_w', 
                                 'rt_w', 
@@ -361,7 +362,7 @@ def loss_function(db, vMtp1, vWtp1, args):
     # print(rewards_intrinsic)
     # print(ret_m.shape)
     # print(ret_w.shape)
-    advantage_w = ret_w + (args['alpha'] * rewards_intrinsic) - value_w
+    advantage_w = (ret_w + args['alpha'] * rewards_intrinsic) - value_w
     advantage_m = ret_m - value_m
 
     # print('Adv Manager:\n', advantage_m)
@@ -371,14 +372,16 @@ def loss_function(db, vMtp1, vWtp1, args):
     # print('goal errors\n', goal_errors)
 
     loss_worker = (logps * advantage_w.detach()).mean()
+
+    # -tf.reduce_sum((self.r - value_m)*goal_errors)
     loss_manager = (goal_errors * advantage_m.detach()).mean()
 
     # print('loss_manager\n', loss_manager)
     # print('loss_worker\n', loss_worker)
 
     # Update the critics into the right direction
-    value_w_loss = 0.5 * advantage_w.pow(2).mean()
-    value_m_loss = 0.5 * advantage_m.pow(2).mean()
+    # value_w_loss = 0.5 * advantage_w.pow(2).sum()
+    # value_m_loss = 0.5 * advantage_m.pow(2).sum()
 
     # print('value_m_loss', value_m_loss)
     # print('value_w_loss', value_w_loss)
@@ -387,15 +390,16 @@ def loss_function(db, vMtp1, vWtp1, args):
 
     # print('entropy\n', entropy)
 
-    loss = - loss_worker - loss_manager + value_w_loss + value_m_loss - (args['entropy_coef'] * entropy)
+    # loss = - loss_worker - loss_manager + value_w_loss + value_m_loss - (args['entropy_coef'] * entropy)
+    loss = loss_worker + loss_manager - (args['entropy_coef'] * entropy)
 
     # print('loss\n', loss)
 
     return loss, {'loss/total_fun_loss': loss.item(),
                   'loss/worker': loss_worker.item(),
                   'loss/manager': loss_manager.item(),
-                  'loss/value_worker': value_w_loss.item(),
-                  'loss/value_manager': value_m_loss.item(),
+                  # 'loss/value_worker': value_w_loss.item(),
+                  # 'loss/value_manager': value_m_loss.item(),
                   'worker/entropy': entropy.item(),
                   'worker/advantage': advantage_w.mean().item(),
                   'worker/intrinsic_reward': rewards_intrinsic.mean().item(),
