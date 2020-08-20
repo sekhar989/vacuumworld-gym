@@ -14,6 +14,7 @@ from pprint import pprint
 
 import gym
 import numpy as np
+import random
 
 import vacuumworld
 
@@ -39,12 +40,12 @@ class VacuumWorld(gym.Env):
             grid ([type], optional): a vacuum world grid to will be loaded. By default a random grid will be loaded.
         """
         if grid is None:
-            grid = vw.random_grid(dimension, 1, 0, 0, 0, dimension, dimension)
+            grid = vw.random_grid(dimension, 1, 0, 0, 0, 2, 1)
         self.__initial_grid = copy.deepcopy(grid)
         self.env = GridEnvironment(GridAmbient(copy.deepcopy(self.__initial_grid), {'white':None}))
-
-        self.actions = [action.move(), action.clean(), action.turn(direction.left), action.turn(direction.right), action.idle()]
-        self.action_meanings = ['move', 'clean', 'turn_left', 'turn_right', 'idle']
+        ## Remove Idle action
+        self.actions = [action.move(), action.clean(), action.turn(direction.left), action.turn(direction.right)]#, action.idle()]
+        self.action_meanings = ['move', 'clean', 'turn_left', 'turn_right']#, 'idle']
 
         self.action_space = gym.spaces.Discrete(len(self.actions))
         self.observation_space = None # TODO...
@@ -89,32 +90,51 @@ class Vectorise(gym.ObservationWrapper):
             Channel[2]: Dirt
     """
 
-    dirt_table = {vwc.colour.green:128, vwc.colour.orange:255}
-    orientation_table = {vwc.orientation.north:64,vwc.orientation.east:128,vwc.orientation.south:192,vwc.orientation.west:255}
+    dirt_table = {vwc.colour.green:255, vwc.colour.orange:255}
+    # orientation_table = {vwc.orientation.north:64,
+    #                      vwc.orientation.east:128,
+    #                      vwc.orientation.south:192,
+    #                      vwc.orientation.west:255}
+    orientation_table = {vwc.orientation.north: 0,
+                          vwc.orientation.east: 1,
+                          vwc.orientation.south: 2,
+                          vwc.orientation.west: 3}
 
     def __init__(self, env):
         super(Vectorise,self).__init__(env)
-        self.observation_space = gym.spaces.Box(low=0, high=1, shape=(3, env.unwrapped.dimension, env.unwrapped.dimension), dtype=np.uint8)
+        self.observation_space = gym.spaces.Box(low=0, high=1, shape=(2, env.unwrapped.dimension, env.unwrapped.dimension), dtype=np.uint8)
         self.dirts = None
 
     def observation(self, grid):
 
         obs = np.zeros(self.observation_space.shape, dtype=self.observation_space.dtype)
+        # obs_01 = np.zeros(self.observation_space.shape, dtype=self.observation_space.dtype)
+        ao_oh = np.zeros(4)
         self.dirts = 0
 
         c = next(iter(grid._get_agents().keys()))
+        # for i in c:
+        #     agent_loc.append(i)
+
         obs[0, c[1], c[0]] = 255 #mask for the current agent
 
         for c,a in grid._get_agents().items(): #all agents
-            #print(c,a)
-            obs[1, c[1], c[0]] = Vectorise.orientation_table[a.orientation]
+            ao_oh[Vectorise.orientation_table[a.orientation]] = 255
+        #     #print(c,a)
+            # obs[1, c[1], c[0]] = Vectorise.orientation_table[a.orientation]
+            # agent_loc.append(Vectorise.orientation_table[a.orientation])
 
         for c,d in grid._get_dirts().items(): #all dirts
             #print(c,d)
             self.dirts += 1
-            obs[2, c[1], c[0]] = Vectorise.dirt_table[d.colour]
+            obs[1, c[1], c[0]] = Vectorise.dirt_table[d.colour]
+            # obs_01[0, c[1], c[0]] = Vectorise.dirt_table[d.colour]
 
-        return obs
+        obs = np.append(ao_oh, obs)
+        # obs.reshape(1, -1)/255.0
+        # obs_01 = np.concatenate((np.array(agent_loc, dtype=self.observation_space.dtype), obs_01.reshape(-1)))
+
+        return obs/255.0
 
 
 class StepWrapper(gym.Wrapper):
@@ -128,55 +148,58 @@ class StepWrapper(gym.Wrapper):
         self.rw_dirts = 0
 
 
-    def _get_agent_loc(self, agent_locs):
-        x, y = [list(i) for i in agent_locs]
-        return [i for i in zip(x, y)]
+    def _get_agent_loc(self):
+        z = self.env.state()
+        return [(c[0], c[1]) for c, a in z._get_agents().items()][0]
 
-    def _get_dirt_loc(self, dirt_locs):
-        x, y = [list(i) for i in dirt_locs]
-        return [i for i in zip(x, y)]
+    def _get_dirt_loc(self):
+        z = self.env.state()
+        return [(c[0], c[1]) for c, d in z._get_dirts().items()]
 
-    def reward(self, obs, action):
+    def reward(self, action):
 
         self.time_penalty += 1
-        # print(self.env.dirts, self.rw_dirts)
-        # agent_loc = self._get_agent_loc(np.where(obs[0,:, :]==255))[0]
-        # gr_dirt_loc = self._get_dirt_loc(np.where(obs[2,:, :]==128))
-        # or_dirt_loc = self._get_dirt_loc(np.where(obs[2,:, :]==255))
-        # print('------------------------------------------------------')
-        # print(agent_loc,'agent loc')
-        # print(action)
-        # print(gr_dirt_loc, 'green dirt loc')
-        # print(or_dirt_loc, 'orange dirt loc')
-        # print('------------------------------------------------------')
-        # dirt_locs = list(itertools.chain.from_iterable([or_dirt_loc, gr_dirt_loc]))
-        # print(f'Dirts Cleaned by worker..:  {16 - self.env.dirts}')
-        # print(dirt_locs)
+        # print(self.time_penalty)
+
+        # agent = self._get_agent_loc()
+        # dirts = self._get_dirt_loc()
 
         if self.env.dirts < self.rw_dirts:
+            # print('Dirt Cleaned...', self.env.dirts, self.rw_dirts)
             self.rw_dirts = self.env.dirts
-            self.time_penalty = self.time_penalty - 500
-            if self.env.dirts == 0:
-                print('\nGrid Cleaned !!\n')
-                return 100, True
-            else:
-                return 100, False
+            # self.time_penalty = int(0.25*self.time_penalty)
+            # if self.env.dirts == 0:
+            #     return 500, False
+            return 100, False
 
-        elif self.time_penalty > 10000:
-            print(f'Time Up !! :(, Dirts Cleaned:  {6 - self.env.dirts}')
+        elif self.env.dirts == 0:
+            print('\nGrid Cleaned !!\n') ## End the episode after all are cleaned i.e. cycle after
             self.time_penalty = 0
-            return -1, True
+            return 0, True
+
+        elif self.time_penalty > 50:
+            # print(self.time_penalty)
+            print(f'\nTime Up !! :(, Dirts Cleaned:  {3 - self.env.dirts}\n')
+            self.time_penalty = 0
+            return 0, True
+
+        # elif agent not in dirts and action == 1:
+        #     # print('Agent not in dirt cleaning..')
+        #     return -5, False
+
+        # elif agent in dirts and action != 1:
+        #     # print('Agent in dirt not cleaning..')
+        #     return -10, False
+
         else:
-            # if self.time_penalty%100 == 0:
-            #     return -1, False
-            # else:
             return -1, False
 
 
 
     def step(self, action):
         state, reward, done, _x = self.env.step(action)
-        reward, done = self.reward(state, action)
+        reward, done = self.reward(action)
+        # print(reward, done, self.env.action_meanings[action])
         self.ep_rewards += reward
         self.ep_len += 1
 
@@ -186,7 +209,7 @@ class StepWrapper(gym.Wrapper):
             for a in self.env.action_meanings:
                 ep_info[a] = self.ep_action_summary.count(a)
             print(ep_info)
-            print('Episode Rewards:\t', self.ep_rewards)
+            print('Episode Rewards:\t', self.ep_rewards, '\n', '-'*40)
             self.ep_rewards = 0
             self.ep_len = 0
             self.ep_action_summary = []
@@ -199,9 +222,13 @@ class StepWrapper(gym.Wrapper):
 
 
 if __name__ == "__main__":
-    env = Vectorise(VacuumWorld(3))
+    random.seed(123)
+    env = StepWrapper(Vectorise(VacuumWorld(5)))
     state = env.reset()
-    print(state)
-    for i in range(10):
-        state, reward, done, *_ = env.step(0)
-        print(state)
+    env.rw_dirts = env.dirts
+    print(env.action_space.n)
+
+    for i in range(500):
+        state, reward, done, ep_info = env.step(np.random.choice(range(4)))
+        # print(state, reward, done, ep_info)
+        if done: break

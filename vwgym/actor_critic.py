@@ -1,141 +1,198 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Mon Aug  3 16:10:52 2020
+Created on Thu Aug 13 13:08:44 2020
 
 @author: archie
 """
 
-import os
-from itertools import count
+import gym
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.distributions import Categorical
+from torch.nn.functional import smooth_l1_loss as huber
+from vwgym.init_utils import *
 
-from vwgym.init_utils import make_env
+from tensorboardX import SummaryWriter
+from datetime import datetime
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.manual_seed(518123)
+
+if torch.cuda.is_available():
+    print('GPU Available:\t', True)
+    device = 'cuda'
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+else:
+    device = 'cpu'
+
+class actor_critic(nn.Module):
+
+    def __init__(self, input_shape, num_actions, device):
+        super(actor_critic, self).__init__()
+
+        self.device = device
+
+        channels, height, width = input_shape
+        self.d = (channels * height * width) + 4
+
+        self.fc1 = nn.Linear(self.d, 1024)
+        self.fc1.weight.data.normal_(0, 0.1)
+
+        self.fc2 = nn.Linear(1024, 512)
+        self.fc2.weight.data.normal_(0, 0.1)
+
+        self.actor = nn.Linear(512, num_actions)
+        self.critic = nn.Linear(512, 1)
+
+        self.to(device)
+
+    def forward(self, x):
+
+        x = F.leaky_relu(self.fc1(x))
+        x = F.leaky_relu(self.fc2(x))
+        actions_prob = F.softmax(self.actor(x), dim=1)
+        critic = self.critic(x)
+        return actions_prob, critic
+
+# Configuration parameters for the whole setup
+seed = 518123
+gamma = 0.99  # Discount factor for past rewards
+max_steps_per_episode = 40000
+
+
 env, input_shape = make_env(3, 1)
-channels, h, w = input_shape
-state_size = channels * h * w
-
 env = env[0]
-action_size = env.action_space.n
-lr = 0.0001
+env.rw_dirts = env.dirts
+n_actions = env.action_space.n
 
-class Actor(nn.Module):
-    def __init__(self, state_size, action_size):
-        super(Actor, self).__init__()
-        self.state_size = state_size
-        self.action_size = action_size
-        self.linear1 = nn.Linear(self.state_size, 32)
-        # self.linear2 = nn.Linear(128, 256)
-        self.linear3 = nn.Linear(32, self.action_size)
+eps = np.finfo(np.float32).eps.item()  # Smallest number such that 1.0 + eps != 1.0
 
-    def forward(self, state):
-        output = F.relu(self.linear1(state))
-        # output = F.relu(self.linear2(output))
-        output = self.linear3(output)
-        d = F.softmax(output, dim=-1)
-        distribution = Categorical(d)
-        return distribution
+ac = actor_critic(input_shape, n_actions, device)
 
+optimizer = optim.Adam(ac.parameters(), lr=1e-4)
+huber_loss = huber
 
-class Critic(nn.Module):
-    def __init__(self, state_size, action_size):
-        super(Critic, self).__init__()
-        self.state_size = state_size
-        self.action_size = action_size
-        self.linear1 = nn.Linear(self.state_size, 32)
-        # self.linear2 = nn.Linear(128, 256)
-        self.linear3 = nn.Linear(32, 1)
+action_probs_history = []
+critic_value_history = []
+rewards_history = []
+running_reward = 0
+episode_count = 0
+steps = 0
 
-    def forward(self, state):
-        output = F.relu(self.linear1(state))
-        # output = F.relu(self.linear2(output))
-        value = self.linear3(output)
-        return value
+dtm = datetime.now()
+log_dir = 'ac_logs_{}'.format('_'.join([str(dtm.date()), str(dtm.time())]))
+writer = SummaryWriter(log_dir=log_dir)
 
+while True:  # Run until solved
 
-def compute_returns(next_value, rewards, masks, gamma=0.99):
-    R = next_value
-    returns = []
-    for step in reversed(range(len(rewards))):
-        R = rewards[step] + gamma * R * masks[step]
-        returns.insert(0, R)
-    return returns
+    episode_reward = 0
 
+    state = env.reset()
+    print('reset')
+    env.rw_dirts = env.dirts
 
-def trainIters(actor, critic, n_iters):
-    optimizerA = optim.Adam(actor.parameters())
-    optimizerC = optim.Adam(critic.parameters())
-    for iter in range(n_iters):
-        state = env.reset()
-        env.rw_dirts = env.dirts
-        log_probs = []
-        values = []
-        rewards = []
-        masks = []
-        entropy = 0
-        # env.reset()
+    for timestep in range(1, max_steps_per_episode):
+        # env.render(); Adding this line would show the attempts
+        # of the agent in a pop up window.
 
-        for i in count():
-            # env.render()
-            state = torch.from_numpy(state.reshape(1, -1)).float().to(device)
-            dist, value = actor(state), critic(state)
+        state = torch.from_numpy(state).float()
+        state = state.view(1, -1).to(device)
+
+        # Predict action probabilities and estimated future rewards
+        # from environment state
+        action_probs, critic_value = ac(state)
+        critic_value_history.append(critic_value[0, 0])
+
+        # Sample action from action probability distribution
+        ep_threshold = 0.01 + (1.0 - 0.01) * math.exp(-1. * steps/50000.0)
+        sample = np.random.uniform(low=0.2, high=1.0, size=None)
+        if sample > ep_threshold:
+            action = torch.argmax(action_probs, dim=1)
+        else:
+            dist = Categorical(action_probs)
             action = dist.sample()
-            next_state, reward, done, ep_info = env.step(action.cpu().numpy()[0])
+            print('Not ArgMax..', ep_threshold, sample, steps)
 
-            log_prob = dist.log_prob(action).unsqueeze(0)
-            entropy += dist.entropy().mean()
+        action_probs_history.append(torch.log(action_probs[0, action]))
 
-            log_probs.append(log_prob)
-            values.append(value)
-            rewards.append(torch.tensor([reward], dtype=torch.float, device=device))
-            masks.append(torch.tensor([1-done], dtype=torch.float, device=device))
+        # Apply the sampled action in our environment
+        state, reward, done, ep_info = env.step(action.cpu().numpy()[0])
+        rewards_history.append(reward)
+        episode_reward += reward
+        steps += 1
 
-            state = next_state
+        if done:
+            print('Episode No.:\t', episode_count)
+            writer.add_scalars('episode/reward', {'reward': ep_info['ep_rewards']}, episode_count)
+            writer.add_scalars('episode/length', {'length': ep_info['ep_len']}, episode_count)
+            break
 
-            if done:
-                # print('Iteration: {}, Score: {}'.format(i, ))
-                break
+    # Update running reward to check condition for solving
+    running_reward = 0.05 * episode_reward + (1 - 0.05) * running_reward
+    writer.add_scalars('episode/running_reward', {'avg_reward': running_reward}, episode_count)
 
+    # Calculate expected value from rewards
+    # - At each timestep what was the total reward received after that timestep
+    # - Rewards in the past are discounted by multiplying them with gamma
+    # - These are the labels for our critic
+    returns = []
+    discounted_sum = 0
+    for r in rewards_history[::-1]:
+        discounted_sum = r + gamma * discounted_sum
+        returns.insert(0, discounted_sum)
 
-        next_state = torch.from_numpy(next_state.reshape(1, -1)).float().to(device)
-        next_value = critic(next_state)
-        returns = compute_returns(next_value, rewards, masks)
+    # Normalize
+    returns = np.array(returns)
+    returns = (returns - np.mean(returns)) / (np.std(returns) + eps)
+    returns = torch.from_numpy(returns).float().to(device)
 
-        log_probs = torch.cat(log_probs)
-        returns = torch.cat(returns).detach()
-        values = torch.cat(values)
+    # Calculating loss values to update our network
+    history = zip(action_probs_history, critic_value_history, returns)
+    actor_losses = []
+    critic_losses = []
+    for log_prob, value, ret in history:
+        # At this point in history, the critic estimated that we would get a
+        # total reward = `value` in the future. We took an action with log probability
+        # of `log_prob` and ended up recieving a total reward = `ret`.
+        # The actor must be updated so that it predicts an action that leads to
+        # high rewards (compared to critic's estimate) with high probability.
+        diff = ret - value
+        actor_losses.append(log_prob * diff * -1)  # actor loss
 
-        advantage = returns - values
+        # The critic must be updated so that it predicts a better estimate of
+        # the future rewards.
+        critic_losses.append(
+            huber_loss(torch.tensor(ret), value)
+        )
 
-        actor_loss = -(log_probs * advantage.detach()).mean()
-        critic_loss = advantage.pow(2).mean()
+    # Backpropagation
+    loss_value = torch.stack(actor_losses).mean() + torch.stack(critic_losses).mean()
+    writer.add_scalars('loss/total_loss',{'total_loss': loss_value},episode_count)
+    writer.add_scalars('loss/actor_loss',{'actor_loss': torch.stack(actor_losses).sum()},episode_count)
+    writer.add_scalars('loss/critic_loss',{'critic_loss': torch.stack(critic_losses).sum()},episode_count)
 
-        optimizerA.zero_grad()
-        optimizerC.zero_grad()
-        actor_loss.backward()
-        critic_loss.backward()
-        optimizerA.step()
-        optimizerC.step()
-    torch.save(actor, 'model/actor.pkl')
-    torch.save(critic, 'model/critic.pkl')
-    env.close()
+    optimizer.zero_grad()
+    loss_value.backward()
+    optimizer.step()
 
+    # Clear the loss and reward history
+    action_probs_history.clear()
+    critic_value_history.clear()
+    rewards_history.clear()
 
-if __name__ == '__main__':
-    # if os.path.exists('model/actor.pkl'):
-    #     actor = torch.load('model/actor.pkl')
-    #     print('Actor Model loaded')
-    # else:
-    actor = Actor(state_size, action_size).to(device)
-    # if os.path.exists('model/critic.pkl'):
-    #     critic = torch.load('model/critic.pkl')
-    #     print('Critic Model loaded')
-    # else:
-    critic = Critic(state_size, action_size).to(device)
-    trainIters(actor, critic, n_iters=100)
+    # Log details
+    episode_count += 1
+    if episode_count % 10 == 0:
+        # template = "\n running reward: {:.2f} at episode {}\n"
+        # print(template.format(running_reward, episode_count))
+        torch.save({'model': ac.state_dict(),
+                    'optim': optimizer.state_dict()},
+                   f'model/vwgym_ac_{episode_count}_ckpt.pt')
+
+    if running_reward > 520:  # Condition to consider the task solved
+        print("Solved at episode {}!".format(episode_count))
+        break

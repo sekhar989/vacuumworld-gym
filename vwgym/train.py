@@ -13,6 +13,7 @@ from datetime import datetime
 import time
 import numpy as np
 from tqdm import tqdm
+import os
 
 torch.manual_seed(518123)
 
@@ -25,38 +26,45 @@ if torch.cuda.is_available():
 else:
     device = 'cpu'
 
-args = {
-            'lr': 25e-4,
-            'steps': 400,
-            'max_steps': 1e8,
-            'env_reboot':5e5,
-            'entropy_coef': 0.01,
-            'gamma_w': 0.95,
-            'gamma_m': 0.999,
-            'alpha': 0.85,
-            'eps': 0.1,
-            'grid_size': 3,
-            'd': 256,
-            'k': 16,
-            'len_hist': 10,
-            'grad_clip':5.0,
-            'writer': True,
-            'num_worker': 16
-
-        }
+args = {'lr': 1e-4,
+        'steps': 51,
+        'max_steps': 1e7,
+        'env_reboot':5e5,
+        'entropy_coef': 0.01,
+        'gamma_w': 0.95,
+        'gamma_m': 0.999,
+        'alpha': 0.85,
+        'eps': 0.001,
+        'grid_size': 3,
+        'd': 256,
+        'k': 16,
+        'len_hist': 10,
+        'grad_clip':5.0,
+        'writer': True,
+        'num_worker': 16}
 
 
-def train(args, device):
+def train(args, device, reload=False):
 
     env, input_shape = make_env(args['grid_size'], args['num_worker'])
-    # print(input_shape)
     num_actions = env[0].action_space.n
-
-    f_net = FuNet(input_shape, args['d'],
-                    args['len_hist'], 
-                    args['eps'], 
-                    args['k'], 
-                    num_actions, 
+    if reload:
+        model_path = 'saved_model/vwgym_f_net_last_ckpt.pt'
+        checkpoint = torch.load(model_path)
+        f_net = FuNet(input_shape, args['d'],
+                    args['len_hist'],
+                    args['eps'],
+                    args['k'],
+                    num_actions,
+                    args['num_worker'],
+                    device)
+        f_net.load_state_dict(checkpoint['model'])
+    else:
+        f_net = FuNet(input_shape, args['d'],
+                    args['len_hist'],
+                    args['eps'],
+                    args['k'],
+                    num_actions,
                     args['num_worker'],
                     device)
 
@@ -64,28 +72,20 @@ def train(args, device):
     print('-'*400)
     print(f_net)
     print('*'*400)
-    optimizer = torch.optim.Adam(f_net.parameters(), lr=args['lr'], eps=1e-5)
+    optimizer = torch.optim.RMSprop(f_net.parameters(), lr=args['lr'])
     goal_history, s_Mt_hist, ep_binary = f_net.agent_model_init()
 
-    # if last_checkpoint:
-    #     f_net.load
-
-    # prev_x = env.reset()
     x = np.array([e.reset() for e in env])
-    
+    x = torch.from_numpy(x).float().to(device)
     for e in env:
         e.rw_dirts = e.dirts
         print(f'Dirts Present..:{e.rw_dirts}')
-
-    # prev_x = normalize_input(prev_x)
-
-    # reset_history = [prev_x]
-    x = torch.from_numpy(x).float().to(device)
 
     step = 0
     switch = 0.
     tr_ep = 0
     score = []
+
 
     if args['writer']:
         dtm = datetime.now()
@@ -97,127 +97,78 @@ def train(args, device):
         goal_history = [g.detach() for g in goal_history]
 
         db = mini_db(keys=[ 'ext_r_i', 'int_r_i',
-                            'v_m', 'v_w', 
-                            'rt_w', 'rt_m', 
-                            'logp', 'entropy', 
+                            'v_m', 'v_w',
+                            'rt_w', 'rt_m',
+                            'logp', 'entropy',
                             'goal_error', 'ep_indicator',
                             'adv_m', 'adv_w' ], space=args['steps'])
 
-        for __ in range(args['steps']):
+        # for __ in range(args['steps']):
+        fin = False
 
-            # print('prev_x\n', prev_x, '\n')
-            # print('x - before\n:', x)
+        # while not fin:
+        for __ in range(args['steps']):
             optimizer.zero_grad()
 
             action_probs, v_Mt, v_Wt, goal_history, s_Mt_hist = f_net(x, goal_history, s_Mt_hist)
-            
-            # print(action_probs)
-            a_t, log_p, entropy = take_action(action_probs)
-            # print('previous:\n', prev_x)
-            # print(a_t, log_p, entropy)
-            
+            a_t, log_p, entropy = take_action(action_probs, step)
+
             x, reward, done, ep_info = take_step(a_t, env, device)
-            # print(x, reward, done, ep_info)
-            # print(np.sum(done))
-
-            # print('x - after\n:', x)
-            # print('Done\t:', done)
-            # print('action:\t', env.action_meanings[a_t])
-            # print('post:\n', x)
-            # print('-'*50)
-            # if done:
-            #     if step//args['env_reboot'] > switch:
-            #         env, _ = make_env(args['grid_size'])
-            #         x = env.reset()
-            #         switch = step//args['env_reboot']
-            #         print('Env Switch....')
-            #     else:
-            #         x = env.reset()
-                
-                # prev_x = x
-                # reset_history.append(prev_x)
-                # score.append(600/ep_info['ep_len'])
-                # score  = score[-100:]
-                # if args['writer']:
-                #     writer.add_scalars('rewards/ep_rewards', {'rewards': ep_info['ep_rewards']}, step)
-                    # writer.add_scalars('rewards/avg_score', {'score': np.mean(score[-100:])}, step)
-                    # writer.add_scalars('action/action_summary', {'move': ep_info['move']}, step)
-                    # writer.add_scalars('action/action_summary', {'turn_left': ep_info['turn_left']}, step)
-                    # writer.add_scalars('action/action_summary', {'turn_right': ep_info['turn_right']}, step)
-                    # writer.add_scalars('action/action_summary', {'clean': ep_info['clean']}, step)
-                    # writer.add_scalars('action/action_summary', {'idle': ep_info['idle']}, step)
-
             tr_ep += args['num_worker']
-            
+
             for ep_d in ep_info:
                 if ep_d['ep_rewards'] is not None:
-                    print(f'Ep. {tr_ep} Completed .. {datetime.now().time()}')
-                    print(f"reward = {round(ep_d['ep_rewards'], 2)} \t| ep_score = {round(600/ep_d['ep_len'], 2)}")
-                    writer.add_scalars('rewards/ep_rewards', {'rewards': ep_d['ep_rewards']}, step)
-                # f"> ep = {self.n_eps} |
-            # else:
-            #     prev_x = x
-            # x = torch.from_numpy(x/255).float().to(device)
-            
+                    # print(f'Ep. {tr_ep} Completed .. | Steps {step} {datetime.now().time()}')
+                    # print(f"reward = {round(ep_d['ep_rewards'], 2)} \t| ep_score = {round(600/ep_d['ep_len'], 2)}")
+                    writer.add_scalars('episode/rewards', {'rewards': ep_d['ep_rewards']}, step)
+                    writer.add_scalars('episode/length', {'length': ep_d['ep_len']}, step)
+
             ep = torch.FloatTensor(1.0 - done).unsqueeze(-1).to(device)
-            # print('EpisodeStatus:\t', ep)
+
             ep_binary.pop(0)
             ep_binary.append(ep)
-            # print(ep_binary)
 
-            # print('ext_r_i', torch.FloatTensor([reward]).to(device))
-            # print('int_r_i', f_net.int_reward(goal_history, s_Mt_hist, ep_binary),)
-            # print('v_m', v_Mt,)
-            # print('v_w', v_Wt,)
-            # print('logp', log_p)
-            # print('entropy', entropy)
-            # print('goal_error', f_net.del_g_theta(goal_history, s_Mt_hist, ep_binary),)
-            # print('ep_indicator', ep)
-
-            # print('---------------------------------------------------------------------')
-
-            db.update({'ext_r_i': torch.FloatTensor(reward).to(device).unsqueeze(0),
-                    'int_r_i': f_net.int_reward(goal_history, s_Mt_hist, ep_binary).unsqueeze(0),
-                    'v_m': v_Mt.unsqueeze(0),
-                    'v_w': v_Wt.unsqueeze(0),
-                    'logp': log_p.unsqueeze(0),
-                    'entropy': entropy.unsqueeze(0),
+            db.update({'ext_r_i': torch.FloatTensor(reward).to(device).unsqueeze(-1),
+                    'int_r_i': f_net.int_reward(goal_history, s_Mt_hist, ep_binary).unsqueeze(-1),
+                    'v_m': v_Mt,
+                    'v_w': v_Wt,
+                    'logp': log_p.unsqueeze(-1),
+                    'entropy': entropy.unsqueeze(-1),
                     'goal_error': f_net.del_g_theta(goal_history, s_Mt_hist, ep_binary),
-                    'ep_indicator': ep.unsqueeze(0)
+                    'ep_indicator': ep
                     })
 
             step += 1
-            # print(step)
-            # ep_binary = [e.detach() for e in ep_binary]
-            # if step == 10:
-            # print('Sleeping...')
-            # time.sleep(10)
+            # x = x_next
 
+            # if done[0]:
+            #     fin = True
 
         with torch.no_grad():
+            # x_next = torch.from_numpy(x_next).float().to(device)
             _, v_Mtp1, v_Wtp1, _, _ = f_net(x, goal_history, s_Mt_hist)
             v_Mtp1 = v_Mtp1.detach()
             v_Wtp1 = v_Wtp1.detach()
 
-        
         loss, loss_summary = loss_function(db, v_Mtp1, v_Wtp1, args)
 
-        
         if args['writer']:
             writer.add_scalars('loss/total_loss',{'total_loss': loss_summary['loss/total_fun_loss']},step)
             writer.add_scalars('loss/manager_loss',{'manager_loss': loss_summary['loss/manager']},step)
             writer.add_scalars('loss/worker_loss',{'worker_loss': loss_summary['loss/worker']},step)
 
-        if step % 1e5 == 0:
+            writer.add_scalars('loss/worker_value_fn_loss',{'worker_value_func_loss': loss_summary['loss/value_worker']},step)
+            writer.add_scalars('loss/manager_value_fn_loss',{'man_value_func_loss': loss_summary['loss/value_manager']},step)
+
+        if step % 1000 == 0:
             torch.save({
                 'model': f_net.state_dict(),
                 'args': args,
-                'processor_mean': f_net.pre_.rms.mean,
+                # 'processor_mean': f_net.pre_.rms.mean,
                 'optim': optimizer.state_dict()},
-                f'saved_model/vwgym_f_net_last_checkpoint.pt')
+                f'saved_model/vwgym_f_net_last_ckpt_{step}.pt')
 
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(f_net.parameters(), args['grad_clip'])
         optimizer.step()
 
 
@@ -226,12 +177,12 @@ def train(args, device):
         'args': args,
         'processor_mean': f_net.pre_.rms.mean,
         'optim': optimizer.state_dict()},
-        f'saved_model/vwgym_f_net.pt')
+        'saved_model/vwgym_f_net.pt')
 
-    # for h, rh in enumerate(reset_history):
-    #     print('run number..\t', h)
-    #     print(rh)
-    #     print('*'*50)
 
 if __name__ == '__main__':
-    train(args, device)
+    if os.path.exists('saved_model/vwgym_f_net_last_ckpt.pt'):
+        print('Model Reloaded..')
+        train(args, device, reload=True)
+    else:
+        train(args, device)
