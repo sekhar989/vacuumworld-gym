@@ -1,3 +1,0 @@
-- Model Script is `fun_lite.py`
-- To start training
-  - `python train.py`
