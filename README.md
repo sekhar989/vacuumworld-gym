@@ -23,3 +23,4 @@ for i in range(10):
     action = random.randint(0,env.action_space.n-1)
     state, reward, done, *_ = env.step(action)
 ```
+For running instructions please refer [here](https://github.com/sekhar989/vacuumworld-gym/tree/master/trained_agents).
