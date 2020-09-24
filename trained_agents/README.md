@@ -27,7 +27,7 @@ Other necessary packages can be installed in one of the following ways depending
 ## Folder Structure
 ---
 
-Agents trained in a '$3 \times 3$' grid with $6$-dirt locations arranged using the random seed $518123$ are saved inside the `saved_model` folder present under each main folder. The folder structure is shown below.
+Agents trained in a `3 x 3` grid with `6-dirt locations` arranged using the random seed `518123` are saved inside the `saved_model` folder present under each main folder. The folder structure is shown below.
 
 - [trained_agents](https://github.com/sekhar989/vacuumworld-gym/tree/master/trained_agents)
     - [A2C](https://github.com/sekhar989/vacuumworld-gym/tree/master/trained_agents/A2C)  
@@ -61,7 +61,7 @@ To run the pre-trained models please run the corresponding `<algorithm>_test.ipy
 
 To train any agent from scratch, please navigate to the corresponding agent type directory and run the `<algorithm>_train.py` script. This repository has implementations of traditional RL algorithms including Q-Learning, advanced (Deep) RL algorithms including [DQN](https://arxiv.org/abs/1312.5602) and [Actor-Critic](https://arxiv.org/abs/1602.01783), and an implementation of a deep hierarchical RL algorithm called [Feudal Networks (FuN)](https://arxiv.org/abs/1703.01161).
 
-By default it will run on a $3 \times 3$ grid size with $6$-dirt locations arranged with random seed $518123$. To train your own configuration, please run the corresponding agent type (algorithm) script in the with corresponding arguments as shown below:
+By default it will run on a `3 x 3` grid size with `6-dirt locations` arranged with random seed `518123`. To train your own configuration, please run the corresponding agent type (algorithm) script in the with corresponding arguments as shown below:
 
 `python hrl_train.py --grid_size=5 --sparse=1 --seed=1`  
 `python a2c_train.py --grid_size=5 --sparse=1 --seed=1`  
