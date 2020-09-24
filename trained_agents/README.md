@@ -79,6 +79,8 @@ This helps us to monitor the training process in real-time.
 
 To test the trained agent the parameters which were used to train should be used in the corresponding test notebook. In `cell-2` of every test notebook, the environment is declared. If there’s change in the parameter during training other than the default parameter, it has to also reflect here.
 
-`env, input_shape = make_env(grid_size=3, num_env=1, vectorize=True)`   
-`env = env[0]`  
-`env.state()`  
+```
+env, input_shape = make_env(grid_size=3, num_env=1, vectorize=True)   
+env = env[0] 
+env.state()  
+```
